@@ -19,7 +19,7 @@ COMPANY_NAME = "ALIDADA Limited"
 [[d1_databases]]
 binding = "DB"
 database_name = "alidada-ledger-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "3af9aed2-3e54-4661-971d-e42a723d6eae"
 
 # Document / voucher attachments. Remove this block if R2 is not enabled on the
 # Cloudflare account — the app keeps working and simply hides document upload.
