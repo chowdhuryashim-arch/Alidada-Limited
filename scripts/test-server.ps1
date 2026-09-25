@@ -160,7 +160,12 @@ Say "Deploying the test server ($Worker)"
 Wr deploy -c $Cfg
 
 Say 'Secret keys'
-$existing = (& npx --yes wrangler secret list -c $Cfg) -join "`n"
+# The secrets can only go onto a Worker that deploy actually created; otherwise
+# wrangler would silently create an empty placeholder Worker to hold them.
+$existing = (& npx --yes wrangler secret list -c $Cfg | ForEach-Object { "$_" }) -join "`n"
+if ($LASTEXITCODE -ne 0) {
+  Fail "The test app ($Worker) was not found on Cloudflare, so the deploy step did not complete (network problem?). Run the script again."
+}
 $saved = @{}
 if (Test-Path $SecretsFile) {
   foreach ($line in Get-Content $SecretsFile) {
