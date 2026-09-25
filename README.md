@@ -85,6 +85,19 @@ After that, the Admin creates at least two Super Users, so they can assign each 
 
 The schema is created automatically on first request. `npm run db:init:remote` applies `schema/schema.sql` explicitly if you prefer.
 
+## Test server
+
+A separate copy of the app for trying things out, with its **own address** (`https://alidada-test.<subdomain>.workers.dev`), its **own empty database** (`alidada-ledger-test-db`) and document bucket, and an orange **TEST SERVER** banner on every page. The company name reads "ALIDADA Limited (TEST)" on screens and printed statements. Nothing here touches the live server or live data.
+
+On Windows (PowerShell), from the project folder:
+
+```
+npm run test-server          # create or update the test server (safe to repeat)
+npm run test-server:reset    # delete ALL test data and start again from /setup
+```
+
+The script creates the test database, writes a git-ignored `wrangler.test.toml`, creates the tables, deploys `alidada-test`, and sets its keys. It prints the test setup key, which is also saved in the git-ignored `.test-secrets`. After changing code, run `npm run test-server` again to put the new version on the test server first. When it looks right, run `npx wrangler deploy` to update live.
+
 ## Local development and tests
 
 ```bash

@@ -4,3 +4,5 @@ node_modules/
 *.log
 test-results/
 .deploy-secrets
+wrangler.test.toml
+.test-secrets

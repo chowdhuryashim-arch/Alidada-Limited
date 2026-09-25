@@ -44,6 +44,13 @@ const PUBLIC_ASSETS = new Set(['/auth.css', '/favicon.svg', '/pwtoggle.js']);
 const PRIVATE_PAGES = { '/': '/index.html', '/help': '/help.html' };
 const MAX_UPLOAD = 20 * 1024 * 1024;
 const RESTORE_PHRASE = 'RESTORE LEDGER BOOK DATA';
+// Spans the full width even on the two-column sign-in/setup pages (body is a
+// grid there), and keeps the banner row from stretching.
+const TEST_BANNER =
+  '<style>body{grid-template-rows:auto 1fr}</style>' +
+  '<div role="note" style="grid-column:1/-1;background:#d9821f;color:#fff;text-align:center;' +
+  "font:700 13px/1.4 system-ui,sans-serif;padding:7px 12px;letter-spacing:.04em\">" +
+  'TEST SERVER — for trying things out only. Data entered here is not the real company ledger.</div>';
 
 export default {
   async fetch(request, env) {
@@ -75,7 +82,7 @@ async function handle(request, env) {
 
   // ---- Public routes ------------------------------------------------------
   if (path === '/api/meta' && method === 'GET') {
-    return json({ ok: true, company: companyName(env), setupRequired: await setupRequired(env.DB) });
+    return json({ ok: true, company: companyName(env), environment: env.APP_ENV || 'production', setupRequired: await setupRequired(env.DB) });
   }
   if (path === '/api/login' && method === 'POST') return login(request, env);
   if (path === '/api/setup' && method === 'POST') return setup(request, env);
@@ -123,10 +130,18 @@ async function servePage(env, url, assetPath) {
   const res = await env.ASSETS.fetch(new Request(new URL(assetPath, url)));
   if (!res.ok) return res;
   const company = companyName(env);
+  const isTest = env.APP_ENV === 'test';
   const out = new HTMLRewriter()
     .on('[data-company]', { element: (el) => el.setInnerContent(company) })
     .on('title[data-page]', {
-      element: (el) => el.setInnerContent(`${el.getAttribute('data-page')} — ${company}`),
+      element: (el) => el.setInnerContent(`${isTest ? '[TEST] ' : ''}${el.getAttribute('data-page')} — ${company}`),
+    })
+    .on('body', {
+      element: (el) => {
+        // A test deployment carries an unmissable banner on every page so it is
+        // never mistaken for the live company ledger.
+        if (isTest) el.prepend(TEST_BANNER, { html: true });
+      },
     })
     .transform(res);
   const headers = new Headers(out.headers);
@@ -168,7 +183,7 @@ async function setup(request, env) {
   if (!env.BOOTSTRAP_KEY) fail(500, 'BOOTSTRAP_KEY is not configured on this Worker.');
   if (!(await setupRequired(db))) fail(409, 'Setup has already been completed.');
   const body = await readJson(request);
-  if (String(body.bootstrapKey ?? '') !== env.BOOTSTRAP_KEY) fail(403, 'Setup key is incorrect.');
+  if (String(body.bootstrapKey ?? '').trim() !== String(env.BOOTSTRAP_KEY).trim()) fail(403, 'Setup key is incorrect.');
   const username = cleanText(body.username, 32).toLowerCase();
   if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(username)) fail(400, 'Username must be 3–32 letters, numbers, dot, dash or underscore.');
   const fullName = cleanText(body.fullName, 80);

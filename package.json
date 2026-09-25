@@ -2,14 +2,17 @@
   "name": "alidada-ledger-book",
   "version": "1.0.0",
   "private": true,
-  "description": "ALIDADA Limited Ledger Book — multi-user business ledger with delegated financial limits and maker-checker approvals, on Cloudflare Workers + D1 (+ R2).",
+  "description": "ALIDADA Limited Ledger Book \u2014 multi-user business ledger with delegated financial limits and maker-checker approvals, on Cloudflare Workers + D1 (+ R2).",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:init:local": "wrangler d1 execute alidada-ledger-db --local --file=schema/schema.sql",
     "db:init:remote": "wrangler d1 execute alidada-ledger-db --remote --file=schema/schema.sql",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test-server": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-server.ps1",
+    "test-server:reset": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-server.ps1 -Reset",
+    "dev:test": "wrangler dev -c wrangler.test.toml"
   },
   "devDependencies": {
     "wrangler": "^4.40.0"
