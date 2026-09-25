@@ -233,6 +233,8 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .tbl tbody tr.click { cursor: pointer; }
 .tbl tbody tr.click:hover td { background: var(--surface-2); }
 .tbl .num { text-align: right; white-space: nowrap; }
+.tbl tr.unposted td .desc, .tbl tr.unposted td.num b { color: var(--ink-2); }
+.tbl tr.unposted td:first-child { box-shadow: inset 3px 0 0 var(--caution); }
 .tbl tfoot td { font-weight: 700; border-top: 2px solid var(--line); }
 .desc { font-weight: 600; }
 .sub { font-size: 12px; color: var(--ink-3); }

@@ -39,7 +39,7 @@
     audit: null,
     limitHistory: null,
     view: null,
-    txFilters: { q: '', status: 'posted', type: '', account: '', category: '' },
+    txFilters: { q: '', status: 'active', type: '', account: '', category: '' },
     period: store.get('period', 'this_month'),
     approvalsTab: null,
   };
@@ -178,6 +178,7 @@
     edited: 'Details edited',
   };
   const PETTY_CASH = 'Petty Cash';
+  const ACTIVE_STATUSES = ['posted', 'pending_approval', 'approved'];
   const statusChip = (s) => `<span class="chip ${s}">${icon(STATUS_ICON[s])}${esc(STATUS_LABEL[s] || s)}</span>`;
   const isFinancial = () => S.me && S.me.role !== 'admin';
   const isSuper = () => S.me && S.me.role === 'superuser';
@@ -459,6 +460,9 @@
     const net = received - spent;
     const needsReview = posted.filter((t) => t.category === 'Needs review' && t.type !== 'transfer').length;
     const recent = postedTx().slice(0, 8);
+    // The user's own entries still going through approval stay visible here
+    // until they are posted (or rejected / withdrawn).
+    const myPending = d.transactions.filter((t) => t.initiatedBy === S.me.id && (t.status === 'pending_approval' || t.status === 'approved'));
     const alerts = [];
     if (S.counts.toApprove)
       alerts.push(`<div class="alert caution">${icon('clock')}<span><b>${S.counts.toApprove}</b> transaction${S.counts.toApprove > 1 ? 's await' : ' awaits'} your approval.</span><a class="btn sm" href="#/approvals/approve">Review now</a></div>`);
@@ -470,6 +474,15 @@
         <div class="row"><span class="muted">Showing</span>${periodSelect('dash-period')}<span class="spacer"></span>
           <span class="small muted">Only posted transactions are counted.</span></div>
         ${alerts.join('')}
+        ${
+          myPending.length
+            ? `<div class="card">
+          <div class="card-h"><h3>My transactions awaiting approval</h3><span class="badge soft">${myPending.length}</span><span class="spacer"></span><a class="btn sm" href="#/approvals/mine">Track all</a></div>
+          <div class="card-b" style="padding-top:6px">${txTable(myPending, { compact: true, showStatus: true })}
+            <div class="small muted" style="margin-top:8px">These are not in the ledger yet. They are counted once approved and finally posted.</div></div>
+        </div>`
+            : ''
+        }
         <div class="cards">
           <div class="card stat"><div class="label"><span class="dot" style="background:var(--positive)"></span>Funds received</div><div class="value pos">${money(received)}</div><div class="foot">${posted.filter((t) => t.type === 'receive').length} Receive Fund entries</div></div>
           <div class="card stat"><div class="label"><span class="dot" style="background:var(--caution)"></span>Expenses</div><div class="value">${money(spent)}</div><div class="foot">${posted.filter((t) => t.type === 'expense').length} expense entries</div></div>
@@ -625,26 +638,41 @@
     if (account && t.account === account) return -t.amount;
     return 0;
   }
+  // Where an unposted transaction stands, in words: who has it now.
+  function statusNote(t) {
+    const me = S.me.id;
+    if (t.status === 'pending_approval')
+      return t.approverId === me ? 'Waiting for your approval' : `Waiting for approval by ${userName(t.approverId)}`;
+    if (t.status === 'approved')
+      return t.initiatedBy === me ? 'Approved — back with you for final posting' : `Approved — awaiting final posting by ${userName(t.initiatedBy)}`;
+    if (t.status === 'rejected') return `Rejected by ${userName(t.decidedBy)}`;
+    return '';
+  }
+  const statusCell = (t) => `${statusChip(t.status)}${statusNote(t) ? `<div class="sub" style="margin-top:3px">${esc(statusNote(t))}</div>` : ''}`;
+
   function txTable(list, { compact: small = false, showStatus = false, footer = false, account = '' } = {}) {
     const rows = list
       .map((t) => {
         const amt = signedAmount(t, account);
         const where = t.type === 'transfer' ? `${esc(t.account)} → ${esc(t.toAccount)}` : esc(t.account);
-        return `<tr class="click" data-act="open-tx" data-id="${t.id}">
+        return `<tr class="click${t.status !== 'posted' ? ' unposted' : ''}" data-act="open-tx" data-id="${t.id}">
           <td class="${small ? 'hide-mobile' : ''}"><div class="num">${esc(t.date)}</div><div class="sub">${esc(t.voucherNo)}</div></td>
           <td><div class="desc">${esc(t.description)}</div><div class="sub">${small ? `${esc(t.date)} · ` : ''}${esc(TYPE_LABEL[t.type])} · ${where}${t.tags.length ? ' · ' + t.tags.map(esc).join(', ') : ''}</div></td>
           ${small ? '' : `<td class="hide-mobile">${esc(t.category)}</td><td class="hide-mobile">${esc(userName(t.initiatedBy))}</td>`}
-          ${showStatus ? `<td>${statusChip(t.status)}</td>` : ''}
+          ${showStatus ? `<td>${statusCell(t)}</td>` : ''}
           <td class="num"><b class="${t.type === 'receive' || amt > 0 ? 'pos' : ''}">${t.type === 'transfer' && !account ? money(t.amount) : money(amt, { sign: true })}</b></td>
         </tr>`;
       })
       .join('');
     let foot = '';
     if (footer) {
-      const r = list.filter((t) => t.type === 'receive').reduce((a, t) => a + t.amount, 0);
-      const e = list.filter((t) => t.type === 'expense').reduce((a, t) => a + t.amount, 0);
+      // Only posted entries are part of the ledger, so only they are totalled.
+      const posted = list.filter((t) => t.status === 'posted');
+      const r = posted.filter((t) => t.type === 'receive').reduce((a, t) => a + t.amount, 0);
+      const e = posted.filter((t) => t.type === 'expense').reduce((a, t) => a + t.amount, 0);
+      const unposted = list.length - posted.length;
       const span = (small ? 2 : 4) + (showStatus ? 1 : 0);
-      foot = `<tfoot><tr><td colspan="${span}">${list.length} entries · Received ${money(r)} · Expenses ${money(e)}</td><td class="num">${money(r - e, { sign: true })}</td></tr></tfoot>`;
+      foot = `<tfoot><tr><td colspan="${span}">${posted.length} posted · Received ${money(r)} · Expenses ${money(e)}${unposted ? ` <span class="muted" style="font-weight:500">· ${unposted} not yet posted (not included in totals)</span>` : ''}</td><td class="num">${money(r - e, { sign: true })}</td></tr></tfoot>`;
     }
     return `<div class="table-wrap"><table class="tbl">
       <thead><tr><th class="${small ? 'hide-mobile' : ''}">Date / Voucher</th><th>Description</th>${small ? '' : '<th class="hide-mobile">Category</th><th class="hide-mobile">Initiated by</th>'}${showStatus ? '<th>Status</th>' : ''}<th class="num">Amount</th></tr></thead>
@@ -659,7 +687,7 @@
         <div class="filters">
           <input class="input search" id="f-q" placeholder="Search description, voucher, tag…" value="${esc(f.q)}">
           <select class="input" id="f-status">
-            ${[['posted', 'Posted'], ['pending_approval', 'Pending approval'], ['approved', 'Awaiting final posting'], ['rejected', 'Rejected'], ['cancelled', 'Withdrawn'], ['', 'All statuses']]
+            ${[['active', 'Posted & pending'], ['posted', 'Posted only'], ['pending_approval', 'Pending approval'], ['approved', 'Awaiting final posting'], ['rejected', 'Rejected'], ['cancelled', 'Withdrawn'], ['', 'All statuses']]
               .map(([v, l]) => `<option value="${v}"${f.status === v ? ' selected' : ''}>${l}</option>`).join('')}
           </select>
           <select class="input" id="f-type">${[['', 'All types'], ['expense', 'Expense'], ['receive', 'Receive Fund'], ['transfer', 'Transfer']].map(([v, l]) => `<option value="${v}"${f.type === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
@@ -674,7 +702,7 @@
       const q = f.q.toLowerCase();
       const list = d.transactions.filter(
         (t) =>
-          (!f.status || t.status === f.status) &&
+          (!f.status || (f.status === 'active' ? ACTIVE_STATUSES.includes(t.status) : t.status === f.status)) &&
           (!f.type || t.type === f.type) &&
           (!f.account || t.account === f.account || t.toAccount === f.account) &&
           (!f.category || (t.category === f.category && t.type !== 'transfer')) &&
