@@ -1,4 +1,4 @@
-name = "alidada-ledger"
+name = "alidada"
 main = "src/index.js"
 compatibility_date = "2025-09-01"
 compatibility_flags = ["nodejs_compat"]

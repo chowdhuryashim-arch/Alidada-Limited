@@ -74,5 +74,5 @@ put_secret SESSION_SECRET
 put_secret BOOTSTRAP_KEY
 
 echo
-echo "✔ Deployed. Open the workers.dev URL shown above and go to /setup to create the Admin."
+echo "✔ Deployed. Open https://alidada.<your-subdomain>.workers.dev (shown above) and go to /setup to create the Admin."
 [ -s .deploy-secrets ] && echo "  Generated secrets were saved to .deploy-secrets (use BOOTSTRAP_KEY on /setup)."

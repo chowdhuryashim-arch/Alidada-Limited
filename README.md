@@ -77,6 +77,8 @@ npx wrangler secret put BOOTSTRAP_KEY            # the one-time key used on /set
 npm run deploy
 ```
 
+The Worker is named `alidada`, so it is served at `https://alidada.<your-account-subdomain>.workers.dev` (for this account, `https://alidada.ashimchy.workers.dev`). To use your own domain instead (e.g. `ledger.alidada.com`), add the domain to Cloudflare and then attach it under Workers → alidada → Settings → Domains & Routes.
+
 Then open the Worker URL. You will be sent to **/setup**. Enter the `BOOTSTRAP_KEY` and create the Admin. Setup works only while no account exists.
 
 After that, the Admin creates at least two Super Users, so they can assign each other's limits, and then the Users. Each person sets their own password at first sign-in.
