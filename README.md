@@ -57,6 +57,16 @@ User initiates (Expense / Receive Fund / Transfer)
 
 ## Deploy to Cloudflare
 
+**One command:** with `CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, D1:Edit, Workers R2 Storage:Edit, Account Settings:Read) and `CLOUDFLARE_ACCOUNT_ID` set, or after `npx wrangler login`, run:
+
+```bash
+./scripts/deploy.sh
+```
+
+It creates or reuses the D1 database, writes its id into `wrangler.toml`, applies the schema, creates the R2 bucket (and deploys without documents if R2 is unavailable), deploys the Worker, and sets `SESSION_SECRET` and `BOOTSTRAP_KEY`. These come from the environment if set; otherwise they are generated and saved to the git-ignored `.deploy-secrets`. It is safe to re-run.
+
+**Manual steps**, if you prefer:
+
 ```bash
 npm install
 npx wrangler login
