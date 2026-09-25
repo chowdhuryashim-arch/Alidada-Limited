@@ -8,9 +8,13 @@
   npm run test-server            # create / update the test server
   npm run test-server:reset      # wipe ALL test data and start again from /setup
 
+  If the test database id cannot be looked up automatically, pass it yourself
+  (find it with: npx wrangler d1 list):
+  powershell -ExecutionPolicy Bypass -File scripts\test-server.ps1 -DatabaseId <uuid>
+
   (or: powershell -ExecutionPolicy Bypass -File scripts\test-server.ps1 [-Reset])
 #>
-param([switch]$Reset)
+param([switch]$Reset, [string]$DatabaseId)
 
 $ErrorActionPreference = 'Continue'
 Set-Location (Split-Path -Parent $PSScriptRoot)
@@ -30,12 +34,21 @@ function Wr {
   if ($LASTEXITCODE -ne 0) { Fail "wrangler $($args -join ' ') failed - see the message above." }
 }
 
+$UuidPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+
+# Look the test database up by name. Parsed with a regex rather than
+# ConvertFrom-Json so stray banner lines in the output cannot break it.
 function Get-DbId {
-  $text = (& npx --yes wrangler d1 list --json) -join "`n"
-  $start = $text.IndexOf('[')
-  if ($start -lt 0) { return $null }
-  $list = ConvertFrom-Json $text.Substring($start)
-  foreach ($d in $list) { if ($d.name -eq $Db) { return $d.uuid } }
+  $text = (& npx --yes wrangler d1 list --json | ForEach-Object { "$_" }) -join "`n"
+  $pattern = '"uuid"\s*:\s*"(' + $UuidPattern + ')"\s*,\s*"name"\s*:\s*"' + [regex]::Escape($Db) + '"'
+  $m = [regex]::Match($text, $pattern)
+  if ($m.Success) { return $m.Groups[1].Value }
+  # Field order is not guaranteed: fall back to scanning object by object.
+  foreach ($obj in [regex]::Matches($text, '\{[^{}]*\}')) {
+    if ($obj.Value -match ('"name"\s*:\s*"' + [regex]::Escape($Db) + '"') -and $obj.Value -match ('"uuid"\s*:\s*"(' + $UuidPattern + ')"')) {
+      return $Matches[1]
+    }
+  }
   return $null
 }
 
@@ -55,12 +68,30 @@ Wr whoami
 
 # ---- 1. Test database -------------------------------------------------------
 Say "Test database: $Db"
-$id = Get-DbId
-if (-not $id) {
-  Wr d1 create $Db
+if ($DatabaseId) {
+  if ($DatabaseId -notmatch "^$UuidPattern$") { Fail "-DatabaseId must look like 3af9aed2-3e54-4661-971d-e42a723d6eae" }
+  $id = $DatabaseId
+} else {
   $id = Get-DbId
 }
-if (-not $id) { Fail "Could not find the database id for $Db." }
+if (-not $id) {
+  $out = (& npx --yes wrangler d1 create $Db | ForEach-Object { "$_" })
+  $createExit = $LASTEXITCODE
+  $out | ForEach-Object { Write-Host $_ }
+  # The create output itself contains the new id (database_id = "...").
+  $m = [regex]::Match(($out -join "`n"), '"?database_id"?\s*[:=]\s*"(' + $UuidPattern + ')"')
+  if ($m.Success) { $id = $m.Groups[1].Value }
+  # Otherwise (e.g. it already existed) look it up, allowing a few seconds for
+  # a brand-new database to appear in Cloudflare's list.
+  for ($try = 1; -not $id -and $try -le 6; $try++) {
+    Start-Sleep -Seconds 3
+    $id = Get-DbId
+  }
+  if (-not $id -and $createExit -ne 0) { Fail "Could not create $Db - see the message above." }
+}
+if (-not $id) {
+  Fail "Could not read the id of $Db. Run: npx wrangler d1 list   then re-run this script with  -DatabaseId <the uuid shown for $Db>"
+}
 Write-Host "  database_id = $id"
 
 # ---- 2. Test document storage (optional) --------------------------------------
