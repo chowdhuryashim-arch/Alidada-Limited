@@ -40,7 +40,7 @@ import { listUsers, createUser, updateUser, resetPassword, setFinancialLimit, li
 import { HttpError, json, fail, readJson, uuid, nowISO, cleanText, parseAmount } from './util.js';
 
 const PUBLIC_PAGES = { '/login': '/login.html', '/setup': '/setup.html' };
-const PUBLIC_ASSETS = new Set(['/auth.css', '/favicon.svg']);
+const PUBLIC_ASSETS = new Set(['/auth.css', '/favicon.svg', '/pwtoggle.js']);
 const PRIVATE_PAGES = { '/': '/index.html', '/help': '/help.html' };
 const MAX_UPLOAD = 20 * 1024 * 1024;
 const RESTORE_PHRASE = 'RESTORE LEDGER BOOK DATA';
