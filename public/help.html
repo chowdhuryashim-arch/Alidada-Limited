@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title data-page="Help">Help</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Sora:wght@600;700&display=swap" />
+    <link rel="stylesheet" href="/app.css" />
+    <style>
+      .doc { max-width: 860px; margin: 0 auto; padding: 28px 16px 80px; }
+      .doc h2 { font-size: 20px; margin: 34px 0 10px; }
+      .doc h3 { font-size: 15px; margin: 20px 0 6px; }
+      .doc p, .doc li { color: var(--ink-2); }
+      .doc ol, .doc ul { padding-left: 22px; }
+      .doc li { margin: 4px 0; }
+      .flow { display: grid; gap: 10px; margin: 14px 0; }
+      .flow div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+      .flow b { color: var(--ink); }
+      .doc table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+      .doc th, .doc td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      .doc th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+      .hdr { border-bottom: 1px solid var(--line); background: var(--surface); }
+      .hdr .doc { padding-top: 22px; padding-bottom: 18px; display: flex; align-items: center; gap: 14px; }
+    </style>
+  </head>
+  <body>
+    <div class="hdr">
+      <div class="doc">
+        <div class="brand-mark">A</div>
+        <div style="flex: 1">
+          <div class="company-line" data-company>ALIDADA Limited</div>
+          <h1 style="font-size: 22px">Ledger Book · Operational Manual</h1>
+        </div>
+        <a class="btn" href="/">Back to the Ledger Book</a>
+      </div>
+    </div>
+    <main class="doc">
+      <h2>1. Roles</h2>
+      <table>
+        <thead><tr><th>Role</th><th>Can do</th><th>Cannot do</th></tr></thead>
+        <tbody>
+          <tr><td><b>Admin</b></td><td>Create Users and Super Users; edit names, designations and roles; enable/disable accounts; reset passwords; view the audit trail.</td><td>Hold or exercise any financial authority: no entries, no approvals, no financial limits.</td></tr>
+          <tr><td><b>Super User</b></td><td>Everything a User can do, plus: assign financial limits to Users and other Super Users; manage budgets, categories, accounts and currency; backup/restore; see every unposted transaction; view the audit trail.</td><td>Assign their own financial limit (another Super User must).</td></tr>
+          <tr><td><b>User</b></td><td>Initiate Expense, Receive Fund and Transfer entries; approve other people’s entries up to their own limit; complete final posting of their approved entries.</td><td>Approve their own entries; change financial limits.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>2. Delegated financial limits</h2>
+      <p>Every User and Super User has a <b>financial limit</b> delegated by a Super User. A new account starts at 0 — until a limit is assigned, every entry that person makes is routed for approval. Each change is recorded in the limit history and the person receives a message.</p>
+
+      <h2>3. How a transaction flows</h2>
+      <div class="flow">
+        <div><b>1 · Initiate.</b> Click <b>Add entry</b> and choose Expense, Receive Fund or Transfer. Enter the amount, date (DD/MM/YYYY), description, category and account. As you type the amount, the form tells you what will happen.</div>
+        <div><b>2a · Within your limit → posted.</b> If the amount is not more than your delegated limit, the entry is committed to the ledger immediately.</div>
+        <div><b>2b · Beyond your limit → sent for approval.</b> The entry is passed to a user whose limit covers the amount (by default the one with the lowest sufficient limit; you may choose another). That approver receives a message: <i>“Approval required”</i>.</div>
+        <div><b>3 · Approve or reject.</b> The approver opens <b>Approvals → Awaiting my approval</b>, reviews the entry and approves (optional remark) or rejects (reason required).</div>
+        <div><b>4 · Back to the initiator.</b> On approval the entry returns to the person who initiated it, who receives a message: <i>“Approved — ready for final posting”</i>. On rejection they receive the reason.</div>
+        <div><b>5 · Final posting.</b> The initiator opens <b>Approvals → Ready for my final posting</b> and clicks <b>Final post</b>. Only now is the entry part of the ledger, balances and statements.</div>
+      </div>
+      <p>Only <b>posted</b> entries count toward totals, balances, budgets and statements. Pending, approved-but-unposted, rejected and withdrawn entries are visible in Transactions (use the status filter) and Approvals.</p>
+
+      <h3>Other workflow actions</h3>
+      <ul>
+        <li><b>Withdraw</b> — the initiator may withdraw an entry that is pending approval or approved but not yet posted.</li>
+        <li><b>Change approver</b> — the initiator may re-route a pending entry to another eligible approver (for example if the approver is away or has been disabled; you receive a message when that happens).</li>
+        <li><b>Reverse</b> — posted entries are never edited or deleted. To correct one, create a <b>reversal</b>: a new opposite entry dated today, which follows the same limit and approval rules.</li>
+        <li><b>Edit details</b> — category, tags and note can be changed by the initiator or a Super User; every change is recorded in the entry’s approval trail.</li>
+      </ul>
+
+      <h2>4. Messages</h2>
+      <p>The bell in the top bar shows unread messages. You receive a message when an entry is sent to you for approval, when your entry is approved and back with you for final posting, when it is rejected, when your limit changes, and for other workflow events. Messages marked <b>Action needed</b> clear automatically once you act. The app checks for new messages every 30 seconds.</p>
+
+      <h2>5. Terms used</h2>
+      <ul>
+        <li><b>Description</b> — what the entry is for (payee, customer, purpose).</li>
+        <li><b>Receive Fund</b> — money coming into an account (a credit).</li>
+        <li><b>Expense</b> — money paid out of an account (a debit).</li>
+        <li><b>Transfer</b> — movement between two company accounts, e.g. bank → Petty Cash. Not counted as received or spent.</li>
+        <li><b>Voucher no.</b> — the unique reference (ALD-000123) given to every entry.</li>
+      </ul>
+
+      <h2>6. Petty Cash</h2>
+      <p>Petty Cash is a protected system account that cannot be removed. Its balance is always computed from posted entries and can never go negative: an expense or transfer out of Petty Cash larger than its balance is refused, both when it is entered and at final posting. Fund it with a <b>Transfer</b> from another account (Dashboard → “Fund Petty Cash”).</p>
+
+      <h2>7. Duplicate caution</h2>
+      <p>If a new entry has the same date, description, amount, account and type as an existing one, the form shows the match and changes the button to <b>Add anyway</b>. Nothing is blocked — you decide.</p>
+
+      <h2>8. Printing a ledger statement</h2>
+      <p>Click <b>Print</b> in the top bar, choose an account (or all) and a date range. The statement opens in a new tab with the company name, total credit, total debit, net and Petty Cash balance boxes (plus opening and closing balances for a single account), a Debit/Credit detail table, a category summary, and signature lines. Allow pop-ups for this site if nothing opens.</p>
+
+      <h2>9. For the Admin</h2>
+      <ol>
+        <li>Open <b>Users → New user</b>, choose <b>User</b> or <b>Super User</b>, enter name, designation, username and a temporary password.</li>
+        <li>Share the username and temporary password privately. The person must set their own password at first sign-in.</li>
+        <li>Create at least two Super Users so that they can assign each other’s limits.</li>
+        <li>Disabling a user signs them out immediately and asks anyone waiting on their approval to choose another approver.</li>
+      </ol>
+
+      <h2>10. Backup</h2>
+      <p>Super Users can download a JSON backup from Settings at any time and restore it later (a typed confirmation is required). Backups contain ledger data only — never users or passwords.</p>
+    </main>
+  </body>
+</html>

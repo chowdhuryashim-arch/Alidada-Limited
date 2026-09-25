@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title data-page="Sign in">Sign in</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Sora:wght@600;700&display=swap" />
+    <link rel="stylesheet" href="/auth.css" />
+  </head>
+  <body>
+    <section class="panel">
+      <div>
+        <div class="mark">A</div>
+        <h1 data-company>ALIDADA Limited</h1>
+        <div class="sub">Ledger Book</div>
+        <p>The company’s books of account — every receipt, payment and transfer recorded with delegated financial authority and a full approval trail.</p>
+        <ul>
+          <li>Entries within your delegated limit post immediately</li>
+          <li>Larger entries route to an authorised approver</li>
+          <li>Approved entries return to you for final posting</li>
+        </ul>
+      </div>
+      <div class="foot">Private system · Authorised personnel only</div>
+    </section>
+    <section class="form-side">
+      <form id="f" autocomplete="on">
+        <div class="company-line" data-company>ALIDADA Limited</div>
+        <h2>Sign in</h2>
+        <p class="hint">Use the username and password given to you by the Admin.</p>
+        <div class="error" id="err"></div>
+        <label>Username<input name="username" id="u" autocomplete="username" required autofocus /></label>
+        <label>Password<input name="password" id="p" type="password" autocomplete="current-password" required /></label>
+        <button id="b" type="submit">Sign in</button>
+        <div class="small">Forgot your password? Ask the Admin to reset it.</div>
+      </form>
+    </section>
+    <script>
+      document.getElementById('f').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const b = document.getElementById('b');
+        const err = document.getElementById('err');
+        b.disabled = true;
+        err.classList.remove('show');
+        try {
+          const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ username: document.getElementById('u').value, password: document.getElementById('p').value }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Sign in failed.');
+          location.href = '/';
+        } catch (x) {
+          err.textContent = x.message;
+          err.classList.add('show');
+          b.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

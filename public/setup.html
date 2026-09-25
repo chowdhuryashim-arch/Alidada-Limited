@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title data-page="First-time setup">First-time setup</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Sora:wght@600;700&display=swap" />
+    <link rel="stylesheet" href="/auth.css" />
+  </head>
+  <body>
+    <section class="panel">
+      <div>
+        <div class="mark">A</div>
+        <h1 data-company>ALIDADA Limited</h1>
+        <div class="sub">Ledger Book · First-time setup</div>
+        <p>Create the Admin account. The Admin creates Users and Super Users and manages access, but holds no financial authority — Super Users delegate financial limits.</p>
+        <ul>
+          <li>This page works only once, while no account exists</li>
+          <li>It requires the setup key configured on the server</li>
+        </ul>
+      </div>
+      <div class="foot">Private system · Authorised personnel only</div>
+    </section>
+    <section class="form-side">
+      <form id="f">
+        <div class="company-line" data-company>ALIDADA Limited</div>
+        <h2>Create the Admin</h2>
+        <div class="error" id="err"></div>
+        <label>Setup key<input id="k" type="password" autocomplete="off" required /></label>
+        <label>Admin full name<input id="n" required /></label>
+        <label>Admin username<input id="u" autocomplete="username" required /></label>
+        <label>Password<input id="p" type="password" autocomplete="new-password" required /></label>
+        <label>Confirm password<input id="p2" type="password" autocomplete="new-password" required /></label>
+        <div class="small">At least 8 characters, with letters and numbers.</div>
+        <button id="b" type="submit">Create Admin and sign in</button>
+      </form>
+    </section>
+    <script>
+      document.getElementById('f').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const v = (id) => document.getElementById(id).value;
+        const b = document.getElementById('b');
+        const err = document.getElementById('err');
+        err.classList.remove('show');
+        if (v('p') !== v('p2')) {
+          err.textContent = 'The passwords do not match.';
+          return err.classList.add('show');
+        }
+        b.disabled = true;
+        try {
+          const res = await fetch('/api/setup', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ bootstrapKey: v('k'), fullName: v('n'), username: v('u'), password: v('p') }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Setup failed.');
+          location.href = '/';
+        } catch (x) {
+          err.textContent = x.message;
+          err.classList.add('show');
+          b.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
