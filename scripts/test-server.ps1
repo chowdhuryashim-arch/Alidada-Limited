@@ -171,8 +171,14 @@ if (Test-Path $SecretsFile) {
 foreach ($name in 'SESSION_SECRET', 'BOOTSTRAP_KEY') {
   if ($existing -match "`"$name`"") { Write-Host "  $name already set - keeping it"; continue }
   if ($name -eq 'BOOTSTRAP_KEY') { $value = 'test-' + (New-RandomKey 6) } else { $value = New-RandomKey 24 }
-  $value | & npx --yes wrangler secret put $name -c $Cfg
-  if ($LASTEXITCODE -ne 0) { Fail "Could not set $name." }
+  # Retry: a brief network drop ("fetch failed") should not stop the run.
+  $ok = $false
+  for ($try = 1; -not $ok -and $try -le 3; $try++) {
+    if ($try -gt 1) { Write-Host "  Retrying $name in 5 seconds (attempt $try of 3)..." -ForegroundColor Yellow; Start-Sleep -Seconds 5 }
+    $value | & npx --yes wrangler secret put $name -c $Cfg
+    $ok = ($LASTEXITCODE -eq 0)
+  }
+  if (-not $ok) { Fail "Could not set $name (network problem?). Check your internet connection and run the script again - it will pick up where it left off." }
   $saved[$name] = $value
 }
 Set-Content -Path $SecretsFile -Value (($saved.Keys | ForEach-Object { "$_=$($saved[$_])" }) -join "`n") -Encoding ascii
