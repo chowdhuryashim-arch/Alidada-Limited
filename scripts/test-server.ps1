@@ -116,6 +116,8 @@ name = "$Worker"
 main = "src/index.js"
 compatibility_date = "$compat"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
 
 [assets]
 directory = "./public"
