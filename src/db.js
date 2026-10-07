@@ -44,8 +44,26 @@ export async function ensureSchema(db) {
     .map((s) => s.trim())
     .filter(Boolean);
   await db.batch(statements.map((s) => db.prepare(s)));
+  // Additive migrations for databases created before these columns existed.
+  // Never drops or renames anything.
+  for (const [table, column, type] of ADDED_COLUMNS) {
+    const { results } = await db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!results.some((c) => c.name === column)) {
+      await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+    }
+  }
   schemaReady = true;
 }
+
+const ADDED_COLUMNS = [
+  ['users', 'mobile', 'TEXT'],
+  ['notifications', 'pushStatus', 'TEXT'],
+  ['notifications', 'pushDetail', 'TEXT'],
+];
+
+// Messages that are worth a phone alert: the ones asking someone to act, or
+// telling them a decision about their own entry or authority.
+export const PUSH_KINDS = new Set(['approval_request', 'ready_to_post', 'rejected', 'reroute_needed', 'limit_changed']);
 
 export async function getSettings(db) {
   const { results } = await db.prepare('SELECT key, value FROM settings').all();
@@ -79,9 +97,9 @@ export function auditStmt(db, actor, action, detail) {
 export function notifyStmt(db, { userId, kind, title, body, transactionId = null, actionable = false }) {
   return db
     .prepare(
-      'INSERT INTO notifications (id, userId, kind, title, body, transactionId, actionable, read, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)',
+      'INSERT INTO notifications (id, userId, kind, title, body, transactionId, actionable, read, pushStatus, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
     )
-    .bind(uuid(), userId, kind, title, body ?? null, transactionId, actionable ? 1 : 0, nowISO());
+    .bind(uuid(), userId, kind, title, body ?? null, transactionId, actionable ? 1 : 0, PUSH_KINDS.has(kind) ? 'pending' : null, nowISO());
 }
 
 // When a user acts on a transaction, the message that asked them to act is done.
@@ -98,6 +116,7 @@ export function publicUser(u) {
     username: u.username,
     fullName: u.fullName,
     designation: u.designation || '',
+    mobile: u.mobile || '',
     role: u.role,
     financialLimit: u.role === 'admin' ? 0 : Number(u.financialLimit) || 0,
     limitSetBy: u.limitSetBy || null,

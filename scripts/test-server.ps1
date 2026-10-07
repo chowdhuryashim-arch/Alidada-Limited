@@ -190,6 +190,11 @@ foreach ($name in 'SESSION_SECRET', 'BOOTSTRAP_KEY') {
 }
 Set-Content -Path $SecretsFile -Value (($saved.Keys | ForEach-Object { "$_=$($saved[$_])" }) -join "`n") -Encoding ascii
 
+# ---- 6. Phone notification keys for the test server (first run asks for an email) ----
+Say 'Phone notifications'
+& node scripts/setup-push.mjs --test
+if ($LASTEXITCODE -ne 0) { Write-Host '  Phone notifications were not switched on - run: node scripts/setup-push.mjs --test' -ForegroundColor Yellow }
+
 Write-Host "`n==================================================================" -ForegroundColor Green
 Write-Host ' TEST server is ready.' -ForegroundColor Green
 Write-Host " Address:   https://$Worker.<your-subdomain>.workers.dev (shown above)"

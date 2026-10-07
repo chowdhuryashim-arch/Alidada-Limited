@@ -318,6 +318,7 @@
     if (!el) return;
     const act = el.dataset.act;
     if (act === 'logout') {
+      await pushForgetDevice().catch(() => {});
       await api('/api/logout', { method: 'POST', body: {} }).catch(() => {});
       location.href = '/login';
     } else if (act === 'change-password') openChangePassword(false);
@@ -335,6 +336,7 @@
     S.me = r.user;
     S.company = r.company;
     S.currency = r.currency || S.currency;
+    S.pushKey = r.pushKey || null;
     const prevUnread = S.counts.unread;
     S.counts = { unread: r.unread, toApprove: r.toApprove, toPost: r.toPost };
     return { prevUnread };
@@ -466,6 +468,8 @@
     const alerts = [];
     if (S.counts.toApprove)
       alerts.push(`<div class="alert caution">${icon('clock')}<span><b>${S.counts.toApprove}</b> transaction${S.counts.toApprove > 1 ? 's await' : ' awaits'} your approval.</span><a class="btn sm" href="#/approvals/approve">Review now</a></div>`);
+    if (S.pushKey && pushSupported() && Notification.permission === 'default' && !store.get('pushNudgeHidden', false))
+      alerts.push(`<div class="alert info" id="push-nudge">${icon('bell')}<span>Get a phone alert when your approval is needed.</span><a class="btn sm primary" href="#/settings">Turn on</a><button class="btn sm" id="push-nudge-x">Not now</button></div>`);
     if (S.counts.toPost)
       alerts.push(`<div class="alert info">${icon('send')}<span><b>${S.counts.toPost}</b> approved transaction${S.counts.toPost > 1 ? 's are' : ' is'} back with you for final posting.</span><a class="btn sm" href="#/approvals/post">Post now</a></div>`);
 
@@ -522,6 +526,10 @@
       S.period = e.target.value;
       store.set('period', S.period);
       rerender();
+    });
+    $('#push-nudge-x', el)?.addEventListener('click', () => {
+      store.set('pushNudgeHidden', true);
+      $('#push-nudge', el).remove();
     });
     $('#fund-pc', el).addEventListener('click', (e) => {
       e.preventDefault();
@@ -1328,6 +1336,115 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Phone browser notifications
+  // ---------------------------------------------------------------------------
+  const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+  const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const keyBytes = (b64u) => {
+    const s = atob(b64u.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64u.length + 3) % 4));
+    return Uint8Array.from(s, (c) => c.charCodeAt(0));
+  };
+  async function pushSubscription() {
+    if (!pushSupported()) return null;
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    return reg ? reg.pushManager.getSubscription() : null;
+  }
+  async function pushEnable() {
+    if (!S.pushKey) throw new Error('Phone notifications are not set up on this server yet. Ask the Admin.');
+    if (!pushSupported()) {
+      throw new Error(isIOS() && !isStandalone()
+        ? 'On iPhone, first tap Share → “Add to Home Screen”, open the Ledger Book from the Home Screen icon, then turn notifications on.'
+        : 'This browser does not support notifications. Use Chrome, Edge, Samsung Internet or Firefox.');
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') throw new Error('Notifications are blocked for this site. Allow them in the browser’s site settings, then try again.');
+    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      // A subscription made with an older server key cannot be used.
+      const cur = sub.options && sub.options.applicationServerKey ? new Uint8Array(sub.options.applicationServerKey) : null;
+      const want = keyBytes(S.pushKey);
+      if (!cur || cur.length !== want.length || cur.some((b, i) => b !== want[i])) {
+        await sub.unsubscribe();
+        sub = null;
+      }
+    }
+    if (!sub) {
+      try {
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(S.pushKey) });
+      } catch (err) {
+        throw new Error(`This browser could not register for notifications (${err.message}). Check that notifications are allowed for this site, or try Chrome.`);
+      }
+    }
+    await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+  }
+  async function pushDisable() {
+    const sub = await pushSubscription();
+    if (sub) {
+      await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
+      await sub.unsubscribe();
+    }
+  }
+  // Signing out: stop this device receiving this person's alerts (signing in again re-links it).
+  async function pushForgetDevice() {
+    const sub = await pushSubscription();
+    if (sub) await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
+  }
+  // On every start, keep the server's record of this device in step.
+  async function pushSync() {
+    if (!S.pushKey || !pushSupported() || Notification.permission !== 'granted') return;
+    const sub = await pushSubscription();
+    if (sub) await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() }).catch(() => {});
+  }
+
+  async function phoneCard() {
+    const u = S.me;
+    const sub = await pushSubscription().catch(() => null);
+    const on = !!sub && pushSupported() && Notification.permission === 'granted';
+    let devices = [];
+    try {
+      devices = (await api('/api/push/devices')).devices;
+    } catch {
+      /* ignore */
+    }
+    let status;
+    if (!S.pushKey) status = `<div class="alert info">${icon('info')}<span>Phone notifications are not set up on this server yet.${u.role === 'admin' ? ' See the Help page, section “Phone notifications”.' : ' Ask the Admin.'}</span></div>`;
+    else if (on) status = `<div class="alert positive">${icon('check')}<span><b>On for this device.</b> You will get an alert when your approval is needed, when your entry is approved for final posting, when it is rejected, and when your limit changes.</span></div>`;
+    else if (isIOS() && !isStandalone()) status = `<div class="alert caution">${icon('info')}<span><b>iPhone:</b> tap Share → <b>Add to Home Screen</b>, open the Ledger Book from that icon, then come back here and turn notifications on.</span></div>`;
+    else status = `<div class="alert caution">${icon('bell')}<span><b>Off for this device.</b> Turn on to get an alert on this phone or computer when your action is needed.</span></div>`;
+    return `<div class="card"><div class="card-h"><h3>Phone notifications</h3></div><div class="card-b stack" style="gap:12px">
+      <dl class="kv"><dt>Mobile number</dt><dd>${u.mobile ? esc(u.mobile) : '<span class="muted">Not recorded — ask the Admin to add it</span>'}</dd></dl>
+      ${status}
+      ${S.pushKey ? `<div class="row">${on ? `<button class="btn" id="push-test">${icon('send')}Send a test notification</button><button class="btn ghost-danger" id="push-off">Turn off on this device</button>` : `<button class="btn primary" id="push-on">${icon('bell')}Turn on notifications for this device</button>`}</div>` : ''}
+      ${devices.length ? `<div class="small muted">Devices receiving your alerts: ${devices.map((d) => esc(d.device)).join(' · ')}</div>` : ''}
+    </div></div>`;
+  }
+  function bindPhoneCard(el) {
+    $('#push-on', el)?.addEventListener('click', (e) =>
+      withBusy(e.currentTarget, async () => {
+        await pushEnable();
+        toast('Phone notifications are on for this device.');
+        rerender();
+      }),
+    );
+    $('#push-off', el)?.addEventListener('click', (e) =>
+      withBusy(e.currentTarget, async () => {
+        await pushDisable();
+        toast('Phone notifications turned off for this device.');
+        rerender();
+      }),
+    );
+    $('#push-test', el)?.addEventListener('click', (e) =>
+      withBusy(e.currentTarget, async () => {
+        const r = await api('/api/push/test', { method: 'POST', body: {} });
+        toast(r.result.status === 'sent' ? 'Test sent — it should appear in a few seconds.' : `Not delivered: ${r.result.detail}`, r.result.status === 'sent' ? '' : 'error');
+      }),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Users (Admin)
   // ---------------------------------------------------------------------------
   async function loadUsers() {
@@ -1346,7 +1463,7 @@
             <tbody>${users
               .map(
                 (u) => `<tr>
-                <td><div class="desc">${esc(u.fullName)}</div><div class="sub">@${esc(u.username)}${u.designation ? ' · ' + esc(u.designation) : ''}</div></td>
+                <td><div class="desc">${esc(u.fullName)}</div><div class="sub">@${esc(u.username)}${u.designation ? ' · ' + esc(u.designation) : ''}</div><div class="sub">${u.mobile ? esc(u.mobile) : u.role === 'admin' ? '' : '<span style="color:var(--danger)">No mobile number — click Edit to add</span>'}</div></td>
                 <td><span class="chip role">${ROLE_LABEL[u.role]}</span></td>
                 <td class="num hide-mobile">${u.role === 'admin' ? '<span class="muted">None</span>' : money(u.financialLimit)}</td>
                 <td>${u.active ? '<span class="chip posted">Active</span>' : '<span class="chip cancelled">Disabled</span>'}${u.mustChangePassword ? ' <span class="chip neutral">Temp password</span>' : ''}</td>
@@ -1355,7 +1472,9 @@
               )
               .join('')}</tbody></table></div></div>
         </div>
+        <div id="push-admin"></div>
       </div>`;
+    loadPushAdmin($('#push-admin', el), users);
     $$('[data-u-edit]', el).forEach((b) => b.addEventListener('click', () => openUserEditor(users.find((u) => u.id === b.dataset.uEdit))));
     $$('[data-u-pw]', el).forEach((b) => b.addEventListener('click', () => openResetPassword(users.find((u) => u.id === b.dataset.uPw))));
     $$('[data-u-toggle]', el).forEach((b) =>
@@ -1382,6 +1501,33 @@
     );
   }
 
+  async function loadPushAdmin(box, users) {
+    let r;
+    try {
+      r = await api('/api/push/log');
+    } catch {
+      return;
+    }
+    const people = users.filter((u) => u.role !== 'admin' && u.active);
+    const label = { sent: 'Delivered', no_device: 'No device', failed: 'Failed', skipped: 'Not set up', pending: 'Waiting', sending: 'Sending' };
+    box.innerHTML = `<div class="card"><div class="card-h"><h3>Phone notifications</h3><span class="spacer"></span>${r.configured ? '<span class="chip posted">Set up</span>' : '<span class="chip cancelled">Not set up</span>'}</div><div class="card-b stack" style="gap:14px">
+      ${r.configured ? '' : `<div class="alert info">${icon('info')}<span>Run <code>node scripts/setup-push.mjs</code> on the deployment PC to switch phone notifications on (Help → Phone notifications).</span></div>`}
+      <div class="small muted">Each person turns notifications on themselves, in Settings on their phone. Devices turned on: ${r.devices.map((d) => `${esc(d.userName)} <b>${d.devices}</b>`).join(' · ') || 'none'}</div>
+      ${r.configured && people.length ? `<div class="row" style="flex-wrap:nowrap"><select class="input" id="pa-user" style="max-width:320px">${people.map((u) => `<option value="${u.id}">${esc(u.fullName)}</option>`).join('')}</select><button class="btn" id="pa-test">${icon('send')}Send test notification</button></div>` : ''}
+      ${r.log.length ? `<div class="table-wrap"><table class="tbl"><thead><tr><th>When</th><th>To</th><th>Message</th><th>Result</th></tr></thead><tbody>${r.log
+        .slice(0, 20)
+        .map((l) => `<tr><td class="small" style="white-space:nowrap">${esc(fmtDateTime(l.createdAt))}</td><td>${esc(l.userName || '')}</td><td class="small">${esc(l.title)}</td><td class="small"><b>${esc(label[l.pushStatus] || l.pushStatus)}</b>${l.pushDetail ? `<div class="muted">${esc(l.pushDetail)}</div>` : ''}</td></tr>`)
+        .join('')}</tbody></table></div>` : '<div class="small muted">No phone notifications sent yet.</div>'}
+    </div></div>`;
+    $('#pa-test', box)?.addEventListener('click', (e) =>
+      withBusy(e.currentTarget, async () => {
+        const res = await api('/api/push/test', { method: 'POST', body: { userId: $('#pa-user', box).value } });
+        toast(res.result.status === 'sent' ? `Test delivered: ${res.result.detail}.` : `Not delivered: ${res.result.detail}`, res.result.status === 'sent' ? '' : 'error');
+        loadPushAdmin(box, users);
+      }),
+    );
+  }
+
   const genPassword = () => {
     const a = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ';
     const d = '23456789';
@@ -1401,6 +1547,7 @@
           <label class="field"><span>Full name *</span><input class="input" id="ue-name" maxlength="80" value="${esc(u?.fullName || '')}"></label>
           <label class="field"><span>Designation</span><input class="input" id="ue-desig" maxlength="80" value="${esc(u?.designation || '')}" placeholder="e.g. Accounts Officer"></label>
         </div>
+        <label class="field"><span>Mobile number *</span><input class="input" id="ue-mobile" type="tel" inputmode="tel" maxlength="20" autocomplete="off" value="${esc(u?.mobile || '')}" placeholder="e.g. 01712345678"></label>
         ${
           isNew
             ? `<div class="grid-2">
@@ -1427,7 +1574,9 @@
     $('#ue-gen', m.el)?.addEventListener('click', () => ($('#ue-pw', m.el).value = genPassword()));
     $('#ue-ok', m.el).addEventListener('click', (e) =>
       withBusy(e.currentTarget, async () => {
-        const body = { fullName: $('#ue-name', m.el).value, designation: $('#ue-desig', m.el).value, role };
+        const mobile = $('#ue-mobile', m.el).value.trim();
+        if (!mobile) throw new Error('Mobile number is required.');
+        const body = { fullName: $('#ue-name', m.el).value, designation: $('#ue-desig', m.el).value, mobile, role };
         if (isNew) {
           body.username = $('#ue-user', m.el).value;
           body.password = $('#ue-pw', m.el).value;
@@ -1571,7 +1720,8 @@
             <span class="small muted">${icon('moon')}</span>
             <div class="segmented" id="s-theme">${['system', 'light', 'dark'].map((t) => `<button data-th="${t}" class="${theme === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
           </div>
-        </div></div>`;
+        </div></div>
+        ${isFinancial() ? '<div id="phone-card"></div>' : ''}`;
     if (isFinancial()) {
       const st = S.data.settings;
       html += `
@@ -1600,6 +1750,13 @@
     }
     html += '</div>';
     el.innerHTML = html;
+    if (isFinancial())
+      phoneCard().then((card) => {
+      const box = $('#phone-card', el);
+      if (!box) return;
+      box.innerHTML = card;
+      bindPhoneCard(box);
+    });
 
     $$('#s-theme button', el).forEach((b) =>
       b.addEventListener('click', () => {
@@ -1858,6 +2015,7 @@
       openChangePassword(true);
     } else await route();
     startPolling();
+    pushSync();
   }
 
   boot();

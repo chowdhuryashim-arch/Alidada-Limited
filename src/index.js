@@ -38,9 +38,20 @@ import {
 } from './ledger.js';
 import { listUsers, createUser, updateUser, resetPassword, setFinancialLimit, limitHistory } from './users.js';
 import { HttpError, json, fail, readJson, uuid, nowISO, cleanText, parseAmount } from './util.js';
+import {
+  dispatchPendingPush,
+  pushPublicKey,
+  pushConfigured,
+  subscribe as pushSubscribe,
+  unsubscribe as pushUnsubscribe,
+  myDevices,
+  latestForDevice,
+  sendTest as pushSendTest,
+  deliveryLog,
+} from './push.js';
 
 const PUBLIC_PAGES = { '/login': '/login.html', '/setup': '/setup.html' };
-const PUBLIC_ASSETS = new Set(['/auth.css', '/favicon.svg', '/pwtoggle.js']);
+const PUBLIC_ASSETS = new Set(['/auth.css', '/favicon.svg', '/pwtoggle.js', '/sw.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png']);
 const PRIVATE_PAGES = { '/': '/index.html', '/help': '/help.html' };
 const MAX_UPLOAD = 20 * 1024 * 1024;
 const RESTORE_PHRASE = 'RESTORE LEDGER BOOK DATA';
@@ -53,9 +64,15 @@ const TEST_BANNER =
   'TEST SERVER — for trying things out only. Data entered here is not the real company ledger.</div>';
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     try {
-      return await handle(request, env);
+      const res = await handle(request, env);
+      // After any change, send phone alerts for the messages it created.
+      // Runs after the response is returned, so it never slows anyone down.
+      if (ctx && !['GET', 'HEAD'].includes(request.method) && new URL(request.url).pathname.startsWith('/api/')) {
+        ctx.waitUntil(dispatchPendingPush(env).catch((e) => console.error('push dispatch failed', e && e.stack ? e.stack : e)));
+      }
+      return res;
     } catch (err) {
       if (err instanceof HttpError) return json({ ok: false, error: err.message, ...err.extra }, err.status);
       console.error('Unhandled error', err && err.stack ? err.stack : err);
@@ -257,7 +274,32 @@ async function api(request, env, user, path, method, url) {
       .bind(user.id)
       .first();
     const settings = await getSettings(db);
-    return json({ ok: true, company: companyName(env), user: publicUser(user), currency: settings.currency, ...counts });
+    return json({ ok: true, company: companyName(env), environment: env.APP_ENV || 'production', user: publicUser(user), currency: settings.currency, pushKey: pushPublicKey(env), ...counts });
+  }
+
+  // Phone browser notifications (every role)
+  if (path === '/api/push/subscribe' && method === 'POST') {
+    return json({ ok: true, ...(await pushSubscribe(env, user, await readJson(request), request.headers.get('user-agent') || '')) });
+  }
+  if (path === '/api/push/unsubscribe' && method === 'POST') {
+    await pushUnsubscribe(env, user, await readJson(request));
+    return json({ ok: true });
+  }
+  if (path === '/api/push/devices' && method === 'GET') {
+    return json({ ok: true, configured: pushConfigured(env), devices: await myDevices(env, user) });
+  }
+  if (path === '/api/push/test' && method === 'POST') {
+    const body = await readJson(request);
+    // Anyone may test their own devices; only the Admin may test someone else's.
+    const target = body.userId && body.userId !== user.id ? (requireRole(user, 'admin'), String(body.userId)) : user.id;
+    return json({ ok: true, result: await pushSendTest(env, user, target) });
+  }
+  if (path === '/api/push/log' && method === 'GET') {
+    requireRole(user, 'admin');
+    return json({ ok: true, configured: pushConfigured(env), ...(await deliveryLog(env)) });
+  }
+  if (path === '/api/notifications/latest' && method === 'GET') {
+    return json({ ok: true, notification: await latestForDevice(env, user) });
   }
 
   // Notifications (every role)

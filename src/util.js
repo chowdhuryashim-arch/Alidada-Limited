@@ -78,3 +78,16 @@ export function parseDate(value) {
 export function todayParts() {
   return parseDate(new Date().toISOString().slice(0, 10));
 }
+
+// ---- Mobile numbers -------------------------------------------------------
+// Stored in international form (+8801712345678). Bangladesh local formats
+// (01712345678, 8801712345678) are accepted and converted.
+export function normalizeMobile(value) {
+  const raw = cleanText(value, 30).replace(/[\s\-().]/g, '');
+  if (!raw) return null;
+  if (/^01[3-9]\d{8}$/.test(raw)) return `+88${raw}`;
+  if (/^8801[3-9]\d{8}$/.test(raw)) return `+${raw}`;
+  if (/^\+8801[3-9]\d{8}$/.test(raw)) return raw;
+  if (/^\+[1-9]\d{7,14}$/.test(raw)) return raw;
+  return undefined; // present but not a valid number
+}

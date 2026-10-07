@@ -1,10 +1,11 @@
 // User administration (Admin) and financial-limit delegation (Super User).
 import { hashPassword, randomSalt, validatePassword } from './auth.js';
 import { auditStmt, notifyStmt, publicUser, getSettings } from './db.js';
-import { fail, uuid, nowISO, cleanText, cents, parseAmount, formatMoney } from './util.js';
+import { fail, uuid, nowISO, cleanText, cents, parseAmount, formatMoney, normalizeMobile } from './util.js';
 
 const ROLE_LABEL = { admin: 'Admin', superuser: 'Super User', user: 'User' };
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/i;
+const MOBILE_HELP = 'Enter a valid mobile number, e.g. 01712345678 or +8801712345678.';
 
 export async function listUsers(db) {
   const { results } = await db.prepare('SELECT * FROM users ORDER BY role, fullName').all();
@@ -18,6 +19,9 @@ export async function createUser(db, admin, input) {
   if (!fullName) fail(400, 'Full name is required.');
   const role = input.role;
   if (!['user', 'superuser'].includes(role)) fail(400, 'Admin can create a User or a Super User only.');
+  const mobile = normalizeMobile(input.mobile);
+  if (mobile === null) fail(400, 'Mobile number is required.');
+  if (mobile === undefined) fail(400, MOBILE_HELP);
   const pwError = validatePassword(input.password);
   if (pwError) fail(400, pwError);
   const exists = await db.prepare('SELECT 1 FROM users WHERE username = ?').bind(username).first();
@@ -29,6 +33,7 @@ export async function createUser(db, admin, input) {
     username,
     fullName,
     designation: cleanText(input.designation, 80) || null,
+    mobile,
     role,
     passwordHash: await hashPassword(String(input.password), salt),
     passwordSalt: salt,
@@ -39,10 +44,10 @@ export async function createUser(db, admin, input) {
   await db.batch([
     db
       .prepare(
-        `INSERT INTO users (id, username, fullName, designation, role, passwordHash, passwordSalt, financialLimit, active, mustChangePassword, sessionVersion, createdBy, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, 1, 0, ?, ?, ?)`,
+        `INSERT INTO users (id, username, fullName, designation, mobile, role, passwordHash, passwordSalt, financialLimit, active, mustChangePassword, sessionVersion, createdBy, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, 0, ?, ?, ?)`,
       )
-      .bind(user.id, user.username, user.fullName, user.designation, user.role, user.passwordHash, user.passwordSalt, user.createdBy, now, now),
+      .bind(user.id, user.username, user.fullName, user.designation, user.mobile, user.role, user.passwordHash, user.passwordSalt, user.createdBy, now, now),
     notifyStmt(db, {
       userId: user.id,
       kind: 'info',
@@ -68,6 +73,16 @@ export async function updateUser(db, admin, id, input) {
     sets.push('fullName = ?');
     binds.push(v);
     if (v !== target.fullName) notes.push(`name → ${v}`);
+  }
+  if (input.mobile !== undefined) {
+    const mobile = normalizeMobile(input.mobile);
+    if (mobile === null) fail(400, 'Mobile number is required.');
+    if (mobile === undefined) fail(400, MOBILE_HELP);
+    if (mobile !== target.mobile) {
+      sets.push('mobile = ?');
+      binds.push(mobile);
+      notes.push(`mobile → ${mobile}`);
+    }
   }
   if (input.designation !== undefined) {
     sets.push('designation = ?');

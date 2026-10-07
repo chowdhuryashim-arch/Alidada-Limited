@@ -73,6 +73,17 @@
       <h2>4. Messages</h2>
       <p>The bell in the top bar shows unread messages. You receive a message when an entry is sent to you for approval, when your entry is approved and back with you for final posting, when it is rejected, when your limit changes, and for other workflow events. Messages marked <b>Action needed</b> clear automatically once you act. The app checks for new messages every 30 seconds.</p>
 
+      <h3>Phone notifications</h3>
+      <p>The same messages can pop up on your phone, like an app alert, even when the Ledger Book is closed. You get one when your approval is needed, when your entry is approved and back with you for final posting, when it is rejected, when you need to choose another approver, and when your financial limit changes.</p>
+      <ol>
+        <li>On your phone, open the Ledger Book and sign in.</li>
+        <li><b>iPhone only:</b> tap Share → <b>Add to Home Screen</b>, then open the Ledger Book from that new icon (needs iOS 16.4 or later).</li>
+        <li>Go to <b>Settings → Phone notifications</b> and tap <b>Turn on notifications for this device</b>. Allow notifications when the phone asks.</li>
+        <li>Tap <b>Send a test notification</b> to check it arrives.</li>
+      </ol>
+      <p>Turn it on separately on each phone or computer you use. Signing out stops that device receiving your alerts; signing in again turns them back on. Tapping an alert opens your Messages. Alerts are free: they use the phone’s own browser notification service, not SMS.</p>
+      <p><b>For the Admin:</b> every new user must have a mobile number. The Users page shows how many devices each person has turned on, a <b>Send test notification</b> button, and whether each alert was delivered. Phone notifications are switched on once per server by the Deployer with <code>node scripts/setup-push.mjs</code> (add <code>--test</code> for the Test Server).</p>
+
       <h2>5. Terms used</h2>
       <ul>
         <li><b>Description</b> — what the entry is for (payee, customer, purpose).</li>

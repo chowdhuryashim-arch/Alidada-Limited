@@ -3,6 +3,9 @@
 // Uses a FRESH local database: run `rm -rf .wrangler/state` before `npm run dev`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createPublicKey, verify } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8787';
 const KEY = process.env.BOOTSTRAP_KEY || 'local-setup-key';
@@ -58,7 +61,7 @@ test('ALIDADA ledger: roles, limits, maker-checker workflow', async () => {
 
   // ---- Admin creates people; has no financial authority -----------------------
   const mk = async (username, fullName, role) => {
-    const res = await admin.post('/api/users', { username, fullName, role, password: 'Temp12345' });
+    const res = await admin.post('/api/users', { username, fullName, role, password: 'Temp12345', mobile: '017' + String(Math.floor(10000000 + Math.random() * 89999999)) });
     assert.equal(res.status, 200, JSON.stringify(res.data));
     return res.data.user;
   };
@@ -66,7 +69,17 @@ test('ALIDADA ledger: roles, limits, maker-checker workflow', async () => {
   const su2 = await mk('super2', 'Super Two', 'superuser');
   const u1 = await mk('user1', 'User One', 'user');
   const u2 = await mk('user2', 'User Two', 'user');
-  assert.equal((await admin.post('/api/users', { username: 'a2', fullName: 'A2', role: 'admin', password: 'Temp12345' })).status, 400, 'admin cannot create another admin');
+  assert.match(u1.mobile, /^\+8801\d{9}$/);
+  assert.equal((await admin.post('/api/users', { username: 'a2', fullName: 'A2', role: 'admin', password: 'Temp12345', mobile: '01712345678' })).status, 400, 'admin cannot create another admin');
+  // Mobile number is mandatory, validated and stored in international form.
+  r = await admin.post('/api/users', { username: 'nomobile', fullName: 'No Mobile', role: 'user', password: 'Temp12345' });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /Mobile number is required/);
+  r = await admin.post('/api/users', { username: 'badmobile', fullName: 'Bad Mobile', role: 'user', password: 'Temp12345', mobile: '12345' });
+  assert.equal(r.status, 400);
+  r = await admin.patch(`/api/users/${u1.id}`, { mobile: '01712-345678' });
+  assert.equal(r.data.user.mobile, '+8801712345678');
+  assert.equal((await admin.patch(`/api/users/${u1.id}`, { mobile: '' })).status, 400, 'mobile cannot be removed');
   assert.equal((await admin.post('/api/transactions', entry({ amount: 1, description: 'x' }))).status, 403, 'admin has no financial authority');
   assert.equal((await admin.put(`/api/users/${u1.id}/limit`, { limit: 100 })).status, 403, 'admin cannot assign limits');
   assert.equal((await admin.get('/api/state')).status, 403);
@@ -188,6 +201,68 @@ test('ALIDADA ledger: roles, limits, maker-checker workflow', async () => {
   assert.equal(r.data.outcome, 'submitted', '30k reversal exceeds u1 limit');
   assert.equal(r.data.transaction.type, 'receive');
   assert.equal((await U1.post(`/api/transactions/${big.id}/reverse`, {})).status, 409, 'only one reversal');
+
+  // ---- Phone browser notifications (Web Push) ----------------------------------------------------------
+  const vapidPub = readFileSync('.dev.vars', 'utf8').match(/^VAPID_PUBLIC_KEY=(.+)$/m)[1].trim();
+  const pushed = [];
+  const mock = http.createServer((req, res) => {
+    pushed.push({ path: req.url, auth: req.headers.authorization || '', ttl: req.headers.ttl });
+    res.writeHead(req.url.includes('gone') ? 410 : 201).end();
+  });
+  await new Promise((ok) => mock.listen(0, '127.0.0.1', ok));
+  const port = mock.address().port;
+  try {
+    const me = (await U1.get('/api/me')).data;
+    assert.equal(me.pushKey, vapidPub, 'public key offered to the browser');
+    assert.equal((await U1.post('/api/push/subscribe', { endpoint: 'ftp://example.com/x' })).status, 400, 'bad endpoint refused');
+    r = await S1.post('/api/push/subscribe', { endpoint: `http://127.0.0.1:${port}/push/super1`, keys: { p256dh: 'x', auth: 'y' } });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    await S1.post('/api/push/subscribe', { endpoint: `http://127.0.0.1:${port}/push/gone-device` });
+    // user1 sends an entry over their limit to super1 → super1's device is woken.
+    r = await U1.post('/api/transactions', entry({ amount: 15000, description: 'Push test laptop', approverId: su1.id }));
+    assert.equal(r.data.transaction.approverId, su1.id);
+    const pushTx = r.data.transaction;
+    for (let i = 0; i < 40 && pushed.length < 2; i++) await new Promise((ok) => setTimeout(ok, 100));
+    const hit = pushed.find((p) => p.path === '/push/super1');
+    assert.ok(hit, 'push reached the approver device');
+    assert.equal(hit.ttl, '86400');
+    // VAPID: "vapid t=<jwt>, k=<public key>", JWT signed ES256 by our key for this push service.
+    const m = hit.auth.match(/^vapid t=([^,]+), k=(.+)$/);
+    assert.ok(m, hit.auth);
+    assert.equal(m[2], vapidPub);
+    const [h, c, sig] = m[1].split('.');
+    const claims = JSON.parse(Buffer.from(c, 'base64url').toString());
+    assert.equal(claims.aud, `http://127.0.0.1:${port}`);
+    assert.ok(claims.exp > Date.now() / 1000);
+    const raw = Buffer.from(vapidPub, 'base64url');
+    const pubKey = createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: raw.subarray(1, 33).toString('base64url'), y: raw.subarray(33).toString('base64url') }, format: 'jwk' });
+    assert.ok(verify('sha256', Buffer.from(`${h}.${c}`), { key: pubKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(sig, 'base64url')), 'VAPID signature valid');
+    // The device then fetches the message text over its own session.
+    const latest = (await S1.get('/api/notifications/latest')).data.notification;
+    assert.match(latest.title, new RegExp(`Approval required: ${pushTx.voucherNo}`));
+    // Expired device (410) is removed; the delivery is logged.
+    await new Promise((ok) => setTimeout(ok, 300));
+    const devices = (await S1.get('/api/push/devices')).data.devices;
+    assert.equal(devices.length, 1, 'expired device removed');
+    const log = (await admin.get('/api/push/log')).data.log;
+    const entryLog = log.find((l) => l.title.includes(pushTx.voucherNo) && l.pushStatus === 'sent');
+    assert.ok(entryLog, JSON.stringify(log.slice(0, 3)));
+    // A person with no device: logged as "no_device", nothing breaks.
+    await S1.post(`/api/transactions/${pushTx.id}/approve`);
+    await new Promise((ok) => setTimeout(ok, 500));
+    const log2 = (await admin.get('/api/push/log')).data.log;
+    assert.ok(log2.some((l) => l.title.startsWith('Approved') && l.pushStatus === 'no_device'), JSON.stringify(log2.slice(0, 3)));
+    await U1.post(`/api/transactions/${pushTx.id}/cancel`, { remark: 'push test done' });
+    // Test button: the Admin may test anyone; a User only themselves.
+    assert.equal((await admin.post('/api/push/test', { userId: su1.id })).data.result.status, 'sent');
+    assert.equal((await U1.post('/api/push/test', { userId: su1.id })).status, 403);
+    assert.equal((await U1.post('/api/push/test', {})).data.result.status, 'no_device');
+    assert.equal((await U1.get('/api/push/log')).status, 403);
+    await S1.post('/api/push/unsubscribe', { endpoint: `http://127.0.0.1:${port}/push/super1` });
+    assert.equal((await S1.get('/api/push/devices')).data.devices.length, 0);
+  } finally {
+    mock.close();
+  }
 
   // ---- Backup / restore round trip (Super User only) -------------------------------------------------
   assert.equal((await U1.get('/api/backup')).status, 403);

@@ -85,6 +85,15 @@ After that, the Admin creates at least two Super Users, so they can assign each 
 
 The schema is created automatically on first request. `npm run db:init:remote` applies `schema/schema.sql` explicitly if you prefer.
 
+## Phone notifications
+
+Approval messages also pop up on people's phones as **browser notifications** (standard Web Push), with no SMS or WhatsApp account and no per-message cost. A notification goes out for: approval required, approved and ready for final posting, rejected, re-route needed, and limit changed.
+
+- **Switch on per server (once):** `node scripts/setup-push.mjs` for Live, `node scripts/setup-push.mjs --test` for the Test Server. `npm run test-server` runs the test one automatically. This creates a key pair kept in the git-ignored `.push-keys.json` and stores it as the secrets `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`. Keep the same keys: changing them switches notifications off on every phone.
+- **Each person:** Settings → Phone notifications → *Turn on notifications for this device*. On iPhone, add the Ledger Book to the Home Screen first (iOS 16.4+).
+- **Admin:** the Users page shows devices per person, a test button, and the delivery result of each alert. Every new user needs a mobile number, stored as +880….
+- **Privacy:** the push carries no content. It wakes the phone, which then fetches the message over the person's own signed-in session. Signing out stops alerts to that device.
+
 ## Test server
 
 A separate copy of the app for trying things out, with its **own address** (`https://alidada-test.<subdomain>.workers.dev`), its **own empty database** (`alidada-ledger-test-db`) and document bucket, and an orange **TEST SERVER** banner on every page. The company name reads "ALIDADA Limited (TEST)" on screens and printed statements. Nothing here touches the live server or live data.
