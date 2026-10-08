@@ -299,6 +299,91 @@ test('ALIDADA ledger: roles, limits, maker-checker workflow', async () => {
     mock.close();
   }
 
+  // ---- Loans to persons: paid out, recovered in parts, never income or expense ---------------------------
+  const loanIn = (o) => ({ type: 'loan_recovery', date: today, account: 'Main Bank Account', ...o });
+  st = (await U1.get('/api/state')).data;
+  const bank0 = st.balances['Main Bank Account'];
+  assert.equal(st.loanAccount, 'Loans to persons');
+  assert.ok(!st.settings.accounts.includes('Loans to persons'), 'loan account is not an ordinary account');
+  r = await U1.post('/api/transactions', { type: 'loan_given', date: today, amount: 5000, account: 'Main Bank Account', borrowerMobile: '01811111111' });
+  assert.equal(r.status, 400, 'borrower name required');
+  r = await U1.post('/api/transactions', { type: 'loan_given', date: today, amount: 5000, account: 'Main Bank Account', borrower: 'Rahim Uddin', borrowerMobile: '123' });
+  assert.equal(r.status, 400, 'bad borrower mobile');
+  r = await U1.post('/api/transactions', { type: 'loan_given', date: today, amount: 5000, account: 'Main Bank Account', borrower: 'Rahim Uddin', borrowerMobile: '01811111111', description: 'Medical advance' });
+  assert.equal(r.data.outcome, 'posted', JSON.stringify(r.data));
+  assert.equal(r.data.transaction.kind, 'loan_given');
+  assert.equal(r.data.transaction.type, 'transfer', 'stored as a movement, not an expense');
+  assert.equal(r.data.transaction.description, 'Loan to Rahim Uddin — Medical advance');
+  const loanPay = r.data.transaction;
+  st = (await U1.get('/api/state')).data;
+  let loan = st.loans.find((l) => l.borrower === 'Rahim Uddin');
+  assert.equal(loan.loanNo, 'LN-0001');
+  assert.equal(loan.mobile, '+8801811111111');
+  assert.equal(loan.purpose, 'Medical advance');
+  assert.deepEqual([loan.given, loan.recovered, loan.outstanding, loan.status], [5000, 0, 5000, 'active']);
+  assert.equal(st.balances['Main Bank Account'], bank0 - 5000);
+  assert.equal(st.balances['Loans to persons'], 5000);
+  // Partial recovery, then more than is owed is refused.
+  r = await U1.post('/api/transactions', loanIn({ amount: 2000, loanId: loan.id, description: 'First instalment' }));
+  assert.equal(r.data.outcome, 'posted', JSON.stringify(r.data));
+  assert.equal(r.data.transaction.kind, 'loan_recovery');
+  assert.equal(r.data.transaction.toAccount, 'Main Bank Account');
+  assert.equal(r.data.transaction.description, 'Loan recovery from Rahim Uddin — First instalment');
+  r = await U1.post('/api/transactions', loanIn({ amount: 3500, loanId: loan.id }));
+  assert.equal(r.status, 400);
+  assert.equal(r.data.reason, 'exceeds_outstanding');
+  assert.match(r.data.error, /Outstanding on LN-0001 is ৳ ?3,000\.00/);
+  assert.equal((await U1.post('/api/transactions', loanIn({ amount: 10, loanId: 'nope' }))).status, 400, 'unknown loan');
+  // Recover the rest in full: the loan closes.
+  r = await U1.post('/api/transactions', loanIn({ amount: 3000, loanId: loan.id, date: today }));
+  assert.equal(r.data.outcome, 'posted', JSON.stringify(r.data));
+  const lastRec = r.data.transaction;
+  loan = (await U1.get('/api/state')).data.loans.find((l) => l.id === loan.id);
+  assert.deepEqual([loan.given, loan.recovered, loan.outstanding, loan.status], [5000, 5000, 0, 'closed']);
+  r = await U1.post('/api/transactions', loanIn({ amount: 1, loanId: loan.id }));
+  assert.match(r.data.error, /nothing outstanding/);
+  // Reversing a recovery re-opens the loan; reversing the payment cannot exceed what is owed.
+  r = await U1.post(`/api/transactions/${lastRec.id}/reverse`, {});
+  assert.equal(r.data.outcome, 'posted', JSON.stringify(r.data));
+  assert.equal(r.data.transaction.kind, 'loan_given');
+  assert.equal(r.data.transaction.loanId, loan.id);
+  loan = (await U1.get('/api/state')).data.loans.find((l) => l.id === loan.id);
+  assert.deepEqual([loan.given, loan.recovered, loan.outstanding, loan.status], [5000, 2000, 3000, 'active']);
+  r = await U1.post(`/api/transactions/${loanPay.id}/reverse`, {});
+  assert.equal(r.status, 400, 'cannot reverse a payment that is partly recovered');
+  // Over the limit: a recovery goes for approval, and pending recoveries count against what is owed.
+  r = await S1.post('/api/transactions', { type: 'loan_given', date: today, amount: 50000, account: 'Main Bank Account', borrower: 'Karim Ahmed' });
+  assert.equal(r.data.outcome, 'posted', JSON.stringify(r.data));
+  const loan2 = (await S1.get('/api/state')).data.loans.find((l) => l.borrower === 'Karim Ahmed');
+  assert.equal(loan2.loanNo, 'LN-0002');
+  r = await U1.post('/api/transactions', loanIn({ amount: 30000, loanId: loan2.id }));
+  assert.equal(r.data.outcome, 'submitted', JSON.stringify(r.data));
+  const bigRec = r.data.transaction;
+  r = await U1.post('/api/transactions', loanIn({ amount: 25000, loanId: loan2.id }));
+  assert.equal(r.data.reason, 'exceeds_outstanding', 'pending 30k leaves only 20k to recover');
+  assert.match(r.data.error, /already entered and awaiting posting/);
+  assert.equal((await U1.get('/api/state')).data.loans.find((l) => l.id === loan2.id).pendingRecovery, 30000);
+  await S1.post(`/api/transactions/${bigRec.id}/approve`);
+  r = await U1.post(`/api/transactions/${bigRec.id}/post`);
+  assert.equal(r.data.transaction.status, 'posted', JSON.stringify(r.data));
+  // Paying more on an existing loan.
+  r = await S1.post('/api/transactions', { type: 'loan_given', date: today, amount: 1000, account: 'Main Bank Account', loanId: loan2.id, description: 'Top-up' });
+  assert.equal(r.data.transaction.description, 'Loan to Karim Ahmed — Top-up');
+  st = (await U1.get('/api/state')).data;
+  assert.equal(st.loans.find((l) => l.id === loan2.id).outstanding, 21000);
+  assert.equal(st.balances['Loans to persons'], 3000 + 21000);
+  assert.equal(st.balances['Main Bank Account'], bank0 - 3000 - 21000);
+  assert.ok(!st.transactions.some((t) => t.loanId && t.type !== 'transfer'), 'loans never count as expense or funds received');
+  // A loan from Petty Cash cannot overdraw it, and leaves no empty loan behind.
+  r = await U1.post('/api/transactions', { type: 'loan_given', date: today, amount: 5000, account: 'Petty Cash', borrower: 'Nobody' });
+  assert.equal(r.data.reason, 'insufficient_petty_cash');
+  assert.ok(!(await S1.get('/api/state')).data.loans.some((l) => l.borrower === 'Nobody'));
+  // The loan account and loan categories are reserved.
+  r = await S1.put('/api/settings', { key: 'accounts', value: ['Main Bank Account', 'Loans to persons'] });
+  assert.ok(!r.data.settings.accounts.includes('Loans to persons'));
+  assert.equal((await S1.post('/api/categories', { name: 'Loan given' })).status, 400);
+  assert.equal((await U1.post('/api/transactions', { type: 'transfer', date: today, amount: 1, description: 'x', account: 'Main Bank Account', toAccount: 'Loans to persons' })).status, 400);
+
   // ---- Backup / restore round trip (Super User only) -------------------------------------------------
   assert.equal((await U1.get('/api/backup')).status, 403);
   const bk = await S1.get('/api/backup');
@@ -308,6 +393,7 @@ test('ALIDADA ledger: roles, limits, maker-checker workflow', async () => {
   r = await S1.post('/api/restore', { confirm: 'RESTORE LEDGER BOOK DATA', backup: bk.data });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal((await S1.get('/api/state')).data.transactions.length, before);
+  assert.equal((await S1.get('/api/state')).data.loans.find((l) => l.id === loan2.id).outstanding, 21000, 'loans survive restore');
 
   // ---- Audit trail ------------------------------------------------------------------------------
   const audit = (await admin.get('/api/audit')).data.entries.map((a) => a.action);

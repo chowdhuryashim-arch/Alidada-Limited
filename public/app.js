@@ -50,7 +50,8 @@
     const v = Number(n) || 0;
     const s = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const pre = v < 0 ? '−' : sign && v > 0 ? '+' : '';
-    return `${pre}${S.currency}\u00a0${s}`;
+    // Word joiner keeps a minus or plus sign on the same line as the amount.
+    return `${pre}${pre ? '\u2060' : ''}${S.currency}\u00a0${s}`;
   }
   function compact(n) {
     const a = Math.abs(n);
@@ -151,6 +152,7 @@
     lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
     moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
     tag: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+    loan: '<path d="M2 12h3l3-2h4a2 2 0 0 1 0 4H9"/><path d="M5 18h9l6-5a1.6 1.6 0 0 0-2.3-2.2L14 14"/><circle cx="16" cy="5" r="3"/>',
     csv: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 11v6M9 14l3 3 3-3"/>',
   };
   const icon = (name, cls = '') => `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -158,7 +160,10 @@
   // ---------------------------------------------------------------------------
   // Domain vocabulary
   // ---------------------------------------------------------------------------
-  const TYPE_LABEL = { expense: 'Expense', receive: 'Receive Fund', transfer: 'Transfer' };
+  const TYPE_LABEL = { expense: 'Expense', receive: 'Receive Fund', transfer: 'Transfer', loan_given: 'Loan given', loan_recovery: 'Loan recovery' };
+  const isLoan = (t) => t.kind === 'loan_given' || t.kind === 'loan_recovery';
+  // The company account a loan entry paid from or received into.
+  const loanCashAccount = (t) => (t.kind === 'loan_given' ? t.account : t.toAccount);
   const STATUS_LABEL = {
     posted: 'Posted',
     pending_approval: 'Pending approval',
@@ -254,6 +259,7 @@
     dashboard: { title: 'Dashboard', icon: 'dashboard', roles: ['user', 'miduser', 'superuser'], render: renderDashboard },
     transactions: { title: 'Transactions', icon: 'list', roles: ['user', 'miduser', 'superuser'], render: renderTransactions },
     approvals: { title: 'Approvals', icon: 'approve', roles: ['user', 'miduser', 'superuser'], render: renderApprovals, badge: () => S.counts.toApprove + S.counts.toPost },
+    loans: { title: 'Loans', icon: 'loan', roles: ['user', 'miduser', 'superuser'], render: renderLoans },
     budgets: { title: 'Budgets', icon: 'target', roles: ['user', 'miduser', 'superuser'], render: renderBudgets },
     documents: { title: 'Documents', icon: 'file', roles: ['user', 'miduser', 'superuser'], render: renderDocuments },
     users: { title: 'Users', icon: 'users', roles: ['admin'], render: renderUsers },
@@ -520,6 +526,7 @@
           <div class="card stat"><div class="label"><span class="dot" style="background:var(--caution)"></span>Expenses</div><div class="value">${money(spent)}</div><div class="foot">${posted.filter((t) => t.type === 'expense').length} expense entries</div></div>
           <div class="card stat"><div class="label">Net</div><div class="value ${net >= 0 ? 'pos' : ''}">${money(net, { sign: true })}</div><div class="foot">Received − expenses</div></div>
           <div class="card stat navy"><div class="label">${icon('wallet')}Petty Cash</div><div class="value">${money(d.pettyCash)}</div><div class="foot"><a href="#" id="fund-pc">Fund Petty Cash →</a></div></div>
+          ${d.loans.length ? `<div class="card stat"><div class="label">${icon('loan')}Loans outstanding</div><div class="value">${money(d.loans.reduce((a, l) => a + l.outstanding, 0))}</div><div class="foot"><a href="#/loans">${d.loans.filter((l) => l.status === 'active').length} active loan${d.loans.filter((l) => l.status === 'active').length === 1 ? '' : 's'} →</a></div></div>` : ''}
           <div class="card stat"><div class="label">${icon('shield')}My financial limit</div><div class="value">${money(S.me.financialLimit)}</div><div class="foot">${S.me.financialLimit > 0 ? 'Entries up to this post immediately' : 'Not assigned — all entries need approval'}</div></div>
         </div>
         <div class="split">
@@ -569,7 +576,11 @@
         const b = S.data.balances[a] || 0;
         return `<div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)"><span>${esc(a)}${a === PETTY_CASH ? ' <span class="chip neutral">System</span>' : ''}</span><b class="num">${money(b)}</b></div>`;
       })
-      .join('');
+      .join('') +
+      (S.data.loans.length
+        ? `<div class="row" style="justify-content:space-between;padding:6px 0"><a href="#/loans">${esc(S.data.loanAccount)}</a><b class="num">${money(S.data.balances[S.data.loanAccount] || 0)}</b></div>
+           <div class="small muted">Money lent to persons and not yet recovered. Not counted as an expense.</div>`
+        : '');
   }
 
   function emptyState(ic, text) {
@@ -664,6 +675,8 @@
   // Transactions
   // ---------------------------------------------------------------------------
   function signedAmount(t, account) {
+    if (!account && t.kind === 'loan_given') return -t.amount;
+    if (!account && t.kind === 'loan_recovery') return t.amount;
     if (t.type === 'receive') return t.amount;
     if (t.type === 'expense') return -t.amount;
     if (account && t.toAccount === account) return t.amount;
@@ -689,10 +702,10 @@
         const where = t.type === 'transfer' ? `${esc(t.account)} → ${esc(t.toAccount)}` : esc(t.account);
         return `<tr class="click${t.status !== 'posted' ? ' unposted' : ''}" data-act="open-tx" data-id="${t.id}">
           <td class="${small ? 'hide-mobile' : ''}"><div class="num">${esc(t.date)}</div><div class="sub">${esc(t.voucherNo)}</div></td>
-          <td><div class="desc">${esc(t.description)}</div><div class="sub">${small ? `${esc(t.date)} · ` : ''}${esc(TYPE_LABEL[t.type])} · ${where}${t.tags.length ? ' · ' + t.tags.map(esc).join(', ') : ''}</div></td>
+          <td><div class="desc">${esc(t.description)}</div><div class="sub">${small ? `${esc(t.date)} · ` : ''}${esc(TYPE_LABEL[t.kind || t.type])} · ${where}${t.tags.length ? ' · ' + t.tags.map(esc).join(', ') : ''}</div></td>
           ${small ? '' : `<td class="hide-mobile">${esc(t.category)}</td><td class="hide-mobile">${esc(userName(t.initiatedBy))}</td>`}
           ${showStatus ? `<td>${statusCell(t)}</td>` : ''}
-          <td class="num"><b class="${t.type === 'receive' || amt > 0 ? 'pos' : ''}">${t.type === 'transfer' && !account ? money(t.amount) : money(amt, { sign: true })}</b></td>
+          <td class="num"><b class="${t.type === 'receive' || amt > 0 ? 'pos' : ''}">${t.type === 'transfer' && !account && !isLoan(t) ? money(t.amount) : money(amt, { sign: true })}</b></td>
         </tr>`;
       })
       .join('');
@@ -722,7 +735,7 @@
             ${[['active', 'Posted & pending'], ['posted', 'Posted only'], ['pending_approval', 'Pending approval'], ['approved', 'Awaiting final posting'], ['rejected', 'Rejected'], ['cancelled', 'Withdrawn'], ['', 'All statuses']]
               .map(([v, l]) => `<option value="${v}"${f.status === v ? ' selected' : ''}>${l}</option>`).join('')}
           </select>
-          <select class="input" id="f-type">${[['', 'All types'], ['expense', 'Expense'], ['receive', 'Receive Fund'], ['transfer', 'Transfer']].map(([v, l]) => `<option value="${v}"${f.type === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
+          <select class="input" id="f-type">${[['', 'All types'], ['expense', 'Expense'], ['receive', 'Receive Fund'], ['transfer', 'Transfer'], ['loan_given', 'Loan given'], ['loan_recovery', 'Loan recovery']].map(([v, l]) => `<option value="${v}"${f.type === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
           <select class="input" id="f-account">${opts(d.settings.accounts, f.account, 'All accounts')}</select>
           <select class="input" id="f-category">${opts(d.settings.categories, f.category, 'All categories')}</select>
           <select class="input" id="f-tag">${opts(d.tags, f.tag, 'All tags')}</select>
@@ -736,7 +749,7 @@
       const list = d.transactions.filter(
         (t) =>
           (!f.status || (f.status === 'active' ? ACTIVE_STATUSES.includes(t.status) : t.status === f.status)) &&
-          (!f.type || t.type === f.type) &&
+          (!f.type || (t.kind || t.type) === f.type) &&
           (!f.account || t.account === f.account || t.toAccount === f.account) &&
           (!f.category || (t.category === f.category && t.type !== 'transfer')) &&
           (!f.tag || t.tags.includes(f.tag)) &&
@@ -773,7 +786,7 @@
     const lines = [cols.map(q).join(',')];
     for (const t of list) {
       lines.push(
-        [t.voucherNo, t.date, TYPE_LABEL[t.type], t.description, t.category, t.account, t.toAccount || '', t.amount.toFixed(2), STATUS_LABEL[t.status], userName(t.initiatedBy), t.decidedBy ? userName(t.decidedBy) : '', t.tags.join('; '), t.note || '']
+        [t.voucherNo, t.date, TYPE_LABEL[t.kind || t.type], t.description, t.category, t.account, t.toAccount || '', t.amount.toFixed(2), STATUS_LABEL[t.status], userName(t.initiatedBy), t.decidedBy ? userName(t.decidedBy) : '', t.tags.join('; '), t.note || '']
           .map(q)
           .join(','),
       );
@@ -815,7 +828,7 @@
       <dl class="kv">
         <dt>Voucher no.</dt><dd>${esc(t.voucherNo)}</dd>
         <dt>Date</dt><dd>${esc(t.date)}</dd>
-        <dt>Type</dt><dd>${esc(TYPE_LABEL[t.type])}</dd>
+        <dt>Type</dt><dd>${esc(TYPE_LABEL[t.kind || t.type])}</dd>
         <dt>Description</dt><dd>${esc(t.description)}</dd>
         <dt>Category</dt><dd>${esc(t.category)}</dd>
         <dt>Account</dt><dd>${where}</dd>
@@ -824,6 +837,7 @@
         <dt>Initiated by</dt><dd>${esc(userName(t.initiatedBy))} · ${esc(fmtDateTime(t.initiatedAt))}</dd>
         ${t.approverId ? `<dt>Approver</dt><dd>${esc(userName(t.approverId))}</dd>` : ''}
         ${t.postedBy ? `<dt>Posted</dt><dd>${esc(userName(t.postedBy))} · ${esc(fmtDateTime(t.postedAt))}${t.autoPosted ? ' (within own limit)' : ''}</dd>` : ''}
+        ${t.loanId ? (() => { const l = S.data.loans.find((x) => x.id === t.loanId); return l ? `<dt>Loan</dt><dd><a href="#" data-loan="${l.id}">${esc(l.loanNo)} · ${esc(l.borrower)}</a> — outstanding ${esc(money(l.outstanding))}</dd>` : ''; })() : ''}
         ${reversal ? `<dt>Reverses</dt><dd><a href="#" data-act="open-tx" data-id="${reversal.id}">${esc(reversal.voucherNo)}</a></dd>` : ''}
         ${doc ? `<dt>Document</dt><dd><a href="/api/documents/${doc.id}/file" target="_blank" rel="noopener">${esc(doc.filename)}</a></dd>` : ''}
       </dl>
@@ -839,7 +853,12 @@
       canDecide ? `<button class="btn ghost-danger" data-x="reject">${icon('reject')}Reject</button><button class="btn positive" data-x="approve">${icon('check')}Approve</button>` : '',
       canPost ? `<button class="btn primary" data-x="post">${icon('send')}Final post</button>` : '',
     ].join('');
-    const m = openModal({ title: `${TYPE_LABEL[t.type]} · ${t.voucherNo}`, body, footer: footer || '<button class="btn" data-close>Close</button>', wide: true });
+    const m = openModal({ title: `${TYPE_LABEL[t.kind || t.type]} · ${t.voucherNo}`, body, footer: footer || '<button class="btn" data-close>Close</button>', wide: true });
+    $('[data-loan]', m.el)?.addEventListener('click', (e) => {
+      e.preventDefault();
+      m.close();
+      openLoanDetail(t.loanId);
+    });
     $$('[data-x]', m.el).forEach((b) =>
       b.addEventListener('click', async () => {
         const action = b.dataset.x;
@@ -961,20 +980,30 @@
       tags: [],
     };
     const accountsFrom = st.accounts;
+    // Loans to persons use the same form in "loan mode": pay a loan out, or
+    // record money received back against an existing loan.
+    const loanMode = f.type === 'loan_given' || f.type === 'loan_recovery';
+    const fixedLoan = preset.loanId ? S.data.loans.find((l) => l.id === preset.loanId) : null;
     const m = openModal({
-      title: 'Add entry',
+      title: loanMode ? 'Loan to a person' : 'Add entry',
       wide: true,
       body: `
         <div class="segmented full" id="ae-type">
-          <button data-t="expense">${icon('down')}Expense</button>
+          ${
+            loanMode
+              ? `<button data-t="loan_given">${icon('down')}Give loan</button>
+          <button data-t="loan_recovery">${icon('up')}Loan recovery</button>`
+              : `<button data-t="expense">${icon('down')}Expense</button>
           <button data-t="receive">${icon('up')}Receive Fund</button>
-          <button data-t="transfer">${icon('transfer')}Transfer</button>
+          <button data-t="transfer">${icon('transfer')}Transfer</button>`
+          }
         </div>
+        <div id="ae-loan"></div>
         <div class="grid-2">
           <label class="field"><span>Amount (${esc(S.currency)}) *</span><input class="input num" id="ae-amount" inputmode="decimal" placeholder="0.00" autocomplete="off"></label>
           <label class="field"><span>Date (DD/MM/YYYY) *</span><input class="input num" id="ae-date" inputmode="numeric" value="${todayDMY()}" maxlength="10" autocomplete="off"></label>
         </div>
-        <label class="field"><span>Description *</span><input class="input" id="ae-desc" maxlength="200" placeholder="e.g. Office rent for September, payment from customer…"></label>
+        <label class="field"><span id="ae-desc-label">Description *</span><input class="input" id="ae-desc" maxlength="200" placeholder="e.g. Office rent for September, payment from customer…"></label>
         <div class="grid-2">
           <label class="field" id="ae-cat-wrap"><span>Category</span><select class="input" id="ae-cat">${st.categories.map((c) => `<option${c === 'Needs review' ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
           <label class="field"><span id="ae-acc-label">Account</span><select class="input" id="ae-acc">${accountsFrom.map((a) => `<option>${esc(a)}</option>`).join('')}</select></label>
@@ -992,12 +1021,48 @@
       footer: `<button class="btn" data-close>Cancel</button><button class="btn primary" id="ae-save">Save entry</button>`,
     });
     const el = m.el;
+    const activeLoans = () => S.data.loans.filter((l) => l.outstanding > 0);
+    const drawLoanFields = (t) => {
+      const box = $('#ae-loan', el);
+      if (t === 'loan_given' && fixedLoan) {
+        box.innerHTML = `<div class="alert info">${icon('loan')}<span>Further payment on <b>${esc(fixedLoan.loanNo)}</b> to <b>${esc(fixedLoan.borrower)}</b>. Outstanding now ${esc(money(fixedLoan.outstanding))}.</span></div>`;
+      } else if (t === 'loan_given') {
+        box.innerHTML = `<div class="grid-2">
+            <label class="field"><span>Borrower (person) *</span><input class="input" id="ae-borrower" maxlength="120" placeholder="Full name of the person" autocomplete="off"></label>
+            <label class="field"><span>Borrower mobile</span><input class="input" id="ae-bmobile" inputmode="tel" maxlength="20" placeholder="01XXXXXXXXX (optional)" autocomplete="off"></label>
+          </div>`;
+      } else if (t === 'loan_recovery') {
+        const list = activeLoans();
+        const sel = preset.loanId || list[0]?.id;
+        box.innerHTML = list.length
+          ? `<label class="field"><span>Loan *</span><select class="input" id="ae-loanid">${list.map((l) => `<option value="${l.id}"${l.id === sel ? ' selected' : ''}>${esc(l.loanNo)} · ${esc(l.borrower)} — outstanding ${esc(money(l.outstanding))}</option>`).join('')}</select></label>
+             <div class="small muted" id="ae-loan-hint" style="margin:-4px 0 6px"></div>`
+          : `<div class="alert caution">${icon('alert')}<span>There is no loan with an outstanding amount to recover.</span></div>`;
+        const hint = () => {
+          const l = S.data.loans.find((x) => x.id === $('#ae-loanid', el)?.value);
+          if (!l) return;
+          const avail = l.outstanding - l.pendingRecovery;
+          $('#ae-loan-hint', el).innerHTML = `Recover in full or in part, up to ${esc(money(avail))}${l.pendingRecovery > 0 ? ` (${esc(money(l.pendingRecovery))} already entered, awaiting posting)` : ''}. <a href="#" id="ae-full">Recover in full</a>`;
+          $('#ae-full', el).addEventListener('click', (e) => {
+            e.preventDefault();
+            $('#ae-amount', el).value = avail.toFixed(2);
+            checkAuthority();
+          });
+        };
+        $('#ae-loanid', el)?.addEventListener('change', () => (hint(), resetForce()));
+        hint();
+      } else box.innerHTML = '';
+    };
     const setType = (t) => {
       f.type = t;
+      const loan = t === 'loan_given' || t === 'loan_recovery';
       $$('#ae-type button', el).forEach((b) => b.classList.toggle('on', b.dataset.t === t));
-      $('#ae-cat-wrap', el).classList.toggle('hidden', t === 'transfer');
+      $('#ae-cat-wrap', el).classList.toggle('hidden', t === 'transfer' || loan);
       $('#ae-to-wrap', el).classList.toggle('hidden', t !== 'transfer');
-      $('#ae-acc-label', el).textContent = t === 'transfer' ? 'From account' : t === 'receive' ? 'Received into account' : 'Paid from account';
+      $('#ae-acc-label', el).textContent = t === 'transfer' ? 'From account' : t === 'receive' || t === 'loan_recovery' ? 'Received into account' : 'Paid from account';
+      $('#ae-desc-label', el).textContent = loan ? 'Purpose / remark (optional)' : 'Description *';
+      $('#ae-desc', el).placeholder = t === 'loan_given' ? 'e.g. Medical advance, to be repaid by December' : t === 'loan_recovery' ? 'e.g. First instalment, cash' : 'e.g. Office rent for September, payment from customer…';
+      drawLoanFields(t);
       resetForce();
     };
     $$('#ae-type button', el).forEach((b) => b.addEventListener('click', () => setType(b.dataset.t)));
@@ -1006,6 +1071,7 @@
       if (firstOther) $('#ae-acc', el).value = firstOther;
     }
     setType(f.type);
+    if ($('#ae-borrower', el)) setTimeout(() => $('#ae-borrower', el).focus(), 40);
 
     // Masked DD/MM/YYYY date input
     $('#ae-date', el).addEventListener('input', (e) => {
@@ -1106,6 +1172,7 @@
         }
         const pending = $('#ae-tag', el).value.trim();
         if (pending && !addTag(pending)) return;
+        if (f.type === 'loan_recovery' && !$('#ae-loanid', el)) throw new Error('There is no loan to recover.');
         $('#ae-tag', el).value = '';
         const body = {
           type: f.type,
@@ -1115,6 +1182,9 @@
           category: f.type === 'transfer' ? undefined : $('#ae-cat', el).value,
           account: $('#ae-acc', el).value,
           toAccount: f.type === 'transfer' ? $('#ae-to', el).value : undefined,
+          loanId: f.type === 'loan_recovery' ? $('#ae-loanid', el)?.value : f.type === 'loan_given' && fixedLoan ? fixedLoan.id : undefined,
+          borrower: $('#ae-borrower', el)?.value,
+          borrowerMobile: $('#ae-bmobile', el)?.value,
           tags: f.tags,
           note: $('#ae-note', el).value,
           documentId: f.documentId,
@@ -1139,6 +1209,166 @@
         btn.disabled = false;
       }
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Loans to persons
+  // ---------------------------------------------------------------------------
+  const LOAN_STATUS = {
+    active: ['Outstanding', 'pending_approval'],
+    closed: ['Fully recovered', 'posted'],
+    awaiting: ['Payment awaiting approval', 'approved'],
+    void: ['Cancelled', 'cancelled'],
+  };
+  const loanChip = (l) => `<span class="chip ${LOAN_STATUS[l.status][1]}">${esc(LOAN_STATUS[l.status][0])}</span>`;
+  const dmyISO = (iso) => (iso ? iso.split('-').reverse().join('-') : '—');
+
+  function renderLoans(el, param) {
+    const loans = S.data.loans;
+    const f = (S.loanFilter ||= { q: '', status: 'active' });
+    const sum = (k, list = loans) => list.reduce((a, l) => a + l[k], 0);
+    const active = loans.filter((l) => l.status === 'active');
+    el.innerHTML = `
+      <div class="stack">
+        <div class="row"><span class="muted">Money paid to a person and recovered later, in full or in parts. Loans are not expenses or funds received: they stay in the <b>${esc(S.data.loanAccount)}</b> account until recovered.</span><span class="spacer"></span>
+          <button class="btn primary" id="ln-new">${icon('plus')}Give a loan</button>
+          ${active.length ? `<button class="btn" id="ln-rec">${icon('up')}Record recovery</button>` : ''}</div>
+        <div class="cards">
+          <div class="card stat navy"><div class="label">${icon('loan')}Outstanding</div><div class="value">${money(sum('outstanding'))}</div><div class="foot">${active.length} active loan${active.length === 1 ? '' : 's'}</div></div>
+          <div class="card stat"><div class="label"><span class="dot" style="background:var(--caution)"></span>Total paid out</div><div class="value">${money(sum('given'))}</div><div class="foot">Posted loan payments</div></div>
+          <div class="card stat"><div class="label"><span class="dot" style="background:var(--positive)"></span>Total recovered</div><div class="value pos">${money(sum('recovered'))}</div><div class="foot">Posted recoveries</div></div>
+        </div>
+        <div class="card">
+          <div class="filters">
+            <input class="input search" id="ln-q" placeholder="Search borrower, loan no., mobile…" value="${esc(f.q)}">
+            <select class="input" id="ln-status">${[['active', 'Outstanding'], ['closed', 'Fully recovered'], ['awaiting', 'Awaiting approval'], ['', 'All loans']].map(([v, l]) => `<option value="${v}"${f.status === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
+          </div>
+          <div class="card-b" id="ln-list"></div>
+        </div>
+      </div>`;
+    const draw = () => {
+      const q = f.q.toLowerCase();
+      const list = loans.filter((l) => (!f.status || l.status === f.status) && (!q || `${l.loanNo} ${l.borrower} ${l.mobile || ''} ${l.purpose || ''}`.toLowerCase().includes(q)));
+      $('#ln-list', el).innerHTML = list.length
+        ? `<div class="table-wrap"><table class="tbl">
+            <thead><tr><th class="hide-mobile">Loan</th><th>Borrower</th><th class="hide-mobile">Last activity</th><th class="num hide-mobile">Paid out</th><th class="num hide-mobile">Recovered</th><th class="num">Outstanding</th><th class="hide-mobile">Status</th></tr></thead>
+            <tbody>${list
+              .map(
+                (l) => `<tr class="click" data-loan="${l.id}">
+                <td class="hide-mobile"><div class="num">${esc(l.loanNo)}</div><div class="sub">since ${esc(dmyISO(l.firstDate))}</div></td>
+                <td><div class="desc">${esc(l.borrower)}</div><div class="sub">${esc(l.mobile || '')}${l.purpose ? `${l.mobile ? ' · ' : ''}${esc(l.purpose)}` : ''}</div>
+                  <div class="sub show-mobile">${esc(l.loanNo)} · ${esc(LOAN_STATUS[l.status][0])}</div></td>
+                <td class="hide-mobile">${esc(dmyISO(l.lastDate))}</td>
+                <td class="num hide-mobile">${money(l.given)}</td>
+                <td class="num hide-mobile pos">${money(l.recovered)}</td>
+                <td class="num"><b>${money(l.outstanding)}</b>${l.pendingGiven || l.pendingRecovery ? `<div class="sub">${l.pendingGiven ? `+${esc(money(l.pendingGiven))} awaiting` : ''}${l.pendingRecovery ? ` −${esc(money(l.pendingRecovery))} awaiting` : ''}</div>` : ''}</td>
+                <td class="hide-mobile">${loanChip(l)}</td></tr>`,
+              )
+              .join('')}</tbody>
+            <tfoot><tr><td class="hide-mobile" colspan="3">${list.length} loan${list.length === 1 ? '' : 's'}</td><td class="show-mobile">${list.length} loan${list.length === 1 ? '' : 's'}</td><td class="num hide-mobile">${money(sum('given', list))}</td><td class="num hide-mobile">${money(sum('recovered', list))}</td><td class="num">${money(sum('outstanding', list))}</td><td class="hide-mobile"></td></tr></tfoot></table></div>`
+        : emptyState('loan', loans.length ? 'No loans match these filters.' : 'No loans yet. Use “Give a loan” to pay money to a person.');
+      $$('[data-loan]', el).forEach((r) => r.addEventListener('click', () => openLoanDetail(r.dataset.loan)));
+    };
+    draw();
+    $('#ln-q', el).addEventListener('input', (e) => ((f.q = e.target.value), draw()));
+    $('#ln-status', el).addEventListener('change', (e) => ((f.status = e.target.value), draw()));
+    $('#ln-new', el).addEventListener('click', () => openAddEntry({ type: 'loan_given' }));
+    $('#ln-rec', el)?.addEventListener('click', () => openAddEntry({ type: 'loan_recovery' }));
+    if (param) openLoanDetail(param);
+  }
+
+  const loanEntries = (id) =>
+    S.data.transactions.filter((t) => t.loanId === id).sort((a, b) => (a.dateISO < b.dateISO ? -1 : a.dateISO > b.dateISO ? 1 : a.voucherNo < b.voucherNo ? -1 : 1));
+
+  function openLoanDetail(id) {
+    const l = S.data.loans.find((x) => x.id === id);
+    if (!l) return toast('Loan not found.', 'error');
+    const entries = loanEntries(id);
+    const pct = l.given > 0 ? Math.min(100, (l.recovered / l.given) * 100) : 0;
+    const body = `
+      <div class="row">${loanChip(l)}<span class="spacer"></span><span style="font-family:var(--font-head);font-size:22px;font-weight:600">${money(l.outstanding)}</span></div>
+      <div class="small muted" style="text-align:right;margin-top:-8px">outstanding</div>
+      <dl class="kv">
+        <dt>Borrower</dt><dd><b>${esc(l.borrower)}</b>${l.mobile ? ` · ${esc(l.mobile)}` : ''}</dd>
+        ${l.purpose ? `<dt>Purpose</dt><dd>${esc(l.purpose)}</dd>` : ''}
+        <dt>Paid out</dt><dd>${money(l.given)}${l.pendingGiven ? ` <span class="muted">(+${esc(money(l.pendingGiven))} awaiting approval/posting)</span>` : ''}</dd>
+        <dt>Recovered</dt><dd>${money(l.recovered)}${l.pendingRecovery ? ` <span class="muted">(${esc(money(l.pendingRecovery))} awaiting approval/posting)</span>` : ''}</dd>
+        <dt>Opened</dt><dd>${esc(fmtDateTime(l.createdAt))} by ${esc(userName(l.createdBy))}</dd>
+      </dl>
+      <div class="loan-track" title="${pct.toFixed(0)}% recovered"><div style="width:${pct}%"></div></div><div class="small muted" style="margin:-8px 0 12px">${pct.toFixed(0)}% recovered</div>
+      <h4 style="font-size:13px;margin-bottom:6px">Payments and recoveries</h4>
+      ${entries.length ? txTable(entries, { compact: true, showStatus: true }) : emptyState('list', 'No entries.')}`;
+    const footer = [
+      `<button class="btn" data-lx="print">${icon('print')}Print loan statement</button>`,
+      l.status !== 'void' ? `<button class="btn" data-lx="more">${icon('down')}Pay more</button>` : '',
+      l.outstanding > 0 ? `<button class="btn primary" data-lx="recover">${icon('up')}Record recovery</button>` : '',
+    ].join('');
+    const m = openModal({ title: `Loan ${l.loanNo} · ${l.borrower}`, body, footer, wide: true });
+    $$('[data-lx]', m.el).forEach((b) =>
+      b.addEventListener('click', () => {
+        const x = b.dataset.lx;
+        if (x === 'print') {
+          const win = window.open('', '_blank');
+          if (!win) return toast('Please allow pop-ups for this site to print the statement.', 'error');
+          win.document.write(loanStatementHtml(l));
+          win.document.close();
+          return;
+        }
+        m.close();
+        openAddEntry({ type: x === 'more' ? 'loan_given' : 'loan_recovery', loanId: l.id });
+      }),
+    );
+  }
+
+  function loanStatementHtml(l) {
+    const rows = loanEntries(l.id).filter((t) => t.status === 'posted');
+    let run = 0;
+    let paid = 0;
+    let got = 0;
+    const m = (n) => money(n);
+    const body = rows
+      .map((t) => {
+        // Paid out raises what is owed; recovered lowers it.
+        const out = t.kind === 'loan_given' ? t.amount : 0;
+        const back = t.kind === 'loan_recovery' ? t.amount : 0;
+        run += out - back;
+        paid += out;
+        got += back;
+        return `<tr><td>${esc(t.date)}</td><td>${esc(t.voucherNo)}</td><td>${esc(t.description)}<div class="s">${esc(loanCashAccount(t))}</div></td><td class="n">${out ? m(out) : ''}</td><td class="n">${back ? m(back) : ''}</td><td class="n">${m(run)}</td></tr>`;
+      })
+      .join('');
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Loan Statement ${esc(l.loanNo)} — ${esc(S.company)}</title>
+      <style>
+        body{font:12px/1.45 system-ui,-apple-system,'Segoe UI',sans-serif;color:#1b1a2b;margin:28px}
+        .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #171735;padding-bottom:12px}
+        h1{font-size:24px;margin:0;letter-spacing:.02em} h2{font-size:15px;margin:2px 0 0;color:#6558d3;font-weight:600}
+        .meta{text-align:right;color:#55536b}
+        .boxes{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:10px;margin:16px 0}
+        .box{border:1px solid #d9d8e5;border-radius:8px;padding:9px 11px}.box b{display:block;font-size:14px;margin-top:3px}
+        .box span{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#6b6985}
+        table{width:100%;border-collapse:collapse}th{background:#171735;color:#fff;text-align:left;padding:7px 8px;font-size:11px}
+        td{padding:6px 8px;border-bottom:1px solid #e6e5ef;vertical-align:top}.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+        tfoot td{font-weight:700;border-top:2px solid #171735}.s{color:#8a88a0;font-size:10.5px}
+        .sig{display:grid;grid-template-columns:repeat(3,1fr);gap:40px;margin-top:60px}
+        .sig div{border-top:1px solid #1b1a2b;padding-top:6px;text-align:center;color:#55536b}
+        .foot{margin-top:24px;color:#8a88a0;font-size:10.5px;text-align:center}
+        @media print{body{margin:12mm}}
+      </style></head><body>
+      <div class="head"><div><h1>${esc(S.company)}</h1><h2>Loan Statement · ${esc(l.loanNo)}</h2></div>
+        <div class="meta"><div><b>Borrower:</b> ${esc(l.borrower)}</div>${l.mobile ? `<div><b>Mobile:</b> ${esc(l.mobile)}</div>` : ''}${l.purpose ? `<div><b>Purpose:</b> ${esc(l.purpose)}</div>` : ''}<div>Generated ${esc(fmtDateTime(new Date().toISOString()))} by ${esc(S.me.fullName)}</div></div></div>
+      <div class="boxes">
+        <div class="box"><span>Paid out</span><b>${m(l.given)}</b></div>
+        <div class="box"><span>Recovered</span><b>${m(l.recovered)}</b></div>
+        <div class="box"><span>Outstanding</span><b>${m(l.outstanding)}</b></div>
+        <div class="box"><span>Status</span><b>${esc(LOAN_STATUS[l.status][0])}</b></div>
+      </div>
+      <table><thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th class="n">Paid out</th><th class="n">Recovered</th><th class="n">Outstanding</th></tr></thead>
+        <tbody>${body || '<tr><td colspan="6" style="text-align:center;padding:20px;color:#8a88a0">No posted entries yet.</td></tr>'}</tbody>
+        <tfoot><tr><td colspan="3">Totals · ${rows.length} entries</td><td class="n">${m(paid)}</td><td class="n">${m(got)}</td><td class="n">${m(run)}</td></tr></tfoot></table>
+      <div class="sig"><div>Borrower's signature</div><div>Prepared by</div><div>Approved by</div></div>
+      <div class="foot">${esc(S.company)} · Ledger Book · Computer-generated statement of posted loan entries</div>
+      <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script>
+      </body></html>`;
   }
 
   // ---------------------------------------------------------------------------
@@ -1187,7 +1417,7 @@
       actions = `<button class="btn ghost-danger sm" data-qa="cancel" data-id="${t.id}">Withdraw</button><button class="btn primary sm" data-qa="post" data-id="${t.id}">${icon('send')}Final post</button>`;
     return `<div class="card qcard click" data-act="open-tx" data-id="${t.id}" style="cursor:pointer">
       <div>
-        <div class="row">${statusChip(t.status)}<span class="sub">${esc(t.voucherNo)} · ${esc(TYPE_LABEL[t.type])}</span></div>
+        <div class="row">${statusChip(t.status)}<span class="sub">${esc(t.voucherNo)} · ${esc(TYPE_LABEL[t.kind || t.type])}</span></div>
         <div class="desc" style="margin-top:6px">${esc(t.description)}</div>
         <div class="meta">
           <span>${esc(t.date)}</span><span>${where}</span><span>${esc(t.category)}</span>
@@ -1955,7 +2185,7 @@
     const m = openModal({
       title: 'Print ledger statement',
       body: `<div class="grid-2">
-          <label class="field"><span>Account</span><select class="input" id="st-acc"><option value="">All accounts</option>${accounts.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
+          <label class="field"><span>Account</span><select class="input" id="st-acc"><option value="">All accounts</option>${[...accounts, ...(S.data.loans.length ? [S.data.loanAccount] : [])].map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
           <label class="field"><span>Tag</span><select class="input" id="st-tag"><option value="">All tags</option>${S.data.tags.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
         </div>
         <label class="field"><span>Date range</span><select class="input" id="st-preset">${PERIODS.map(([v, l]) => `<option value="${v}"${v === S.period ? ' selected' : ''}>${v === 'all' ? 'All dates' : l}</option>`).join('')}</select></label>
@@ -1995,7 +2225,11 @@
     for (const t of postedTx()) {
       if ((from && t.dateISO < from) || (to && t.dateISO > to)) continue;
       if (tag && !t.tags.includes(tag)) continue;
-      if (t.type === 'transfer') {
+      if (isLoan(t) && account !== S.data.loanAccount) {
+        const cash = loanCashAccount(t);
+        if (!account || cash === account)
+          rows.push({ t, debit: t.kind === 'loan_given' ? t.amount : 0, credit: t.kind === 'loan_recovery' ? t.amount : 0, acct: cash, desc: t.description });
+      } else if (t.type === 'transfer') {
         if (!account || t.account === account) rows.push({ t, debit: t.amount, credit: 0, acct: t.account, desc: `${t.description} (to ${t.toAccount})` });
         if (!account || t.toAccount === account) rows.push({ t, debit: 0, credit: t.amount, acct: t.toAccount, desc: `${t.description} (from ${t.account})` });
       } else if (!account || t.account === account) {
@@ -2011,7 +2245,7 @@
     let run = opening;
     const cats = new Map();
     for (const r of rows) {
-      const c = r.t.type === 'transfer' ? 'Transfer' : r.t.category;
+      const c = r.t.type === 'transfer' && !isLoan(r.t) ? 'Transfer' : r.t.category;
       cats.set(c, (cats.get(c) || 0) + (r.credit - r.debit));
     }
     const m = (n) => money(n);
@@ -2019,7 +2253,7 @@
     const body = rows
       .map((r) => {
         run += r.credit - r.debit;
-        return `<tr><td>${esc(r.t.date)}</td><td>${esc(r.t.voucherNo)}</td><td>${esc(r.desc)}${!account ? `<div class="s">${esc(r.acct)}</div>` : ''}</td><td>${esc(r.t.type === 'transfer' ? 'Transfer' : r.t.category)}</td>
+        return `<tr><td>${esc(r.t.date)}</td><td>${esc(r.t.voucherNo)}</td><td>${esc(r.desc)}${!account ? `<div class="s">${esc(r.acct)}</div>` : ''}</td><td>${esc(r.t.type === 'transfer' && !isLoan(r.t) ? 'Transfer' : r.t.category)}</td>
           <td class="n">${r.debit ? m(r.debit) : ''}</td><td class="n">${r.credit ? m(r.credit) : ''}</td>${balances ? `<td class="n">${m(run)}</td>` : ''}</tr>`;
       })
       .join('');

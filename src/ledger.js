@@ -2,19 +2,25 @@
 // → approve / reject → final posting by the initiator.
 import {
   PETTY_CASH_ACCOUNT,
+  LOAN_ACCOUNT,
   getSettings,
   auditStmt,
   notifyStmt,
   resolveNotificationsStmt,
   effectiveRole,
 } from './db.js';
-import { fail, uuid, nowISO, cleanText, cents, round2, parseAmount, parseDate, formatMoney } from './util.js';
+import { fail, uuid, nowISO, cleanText, cents, round2, parseAmount, parseDate, formatMoney, normalizeMobile } from './util.js';
 
-const TYPE_LABEL = { expense: 'Expense', receive: 'Receive Fund', transfer: 'Transfer' };
+const TYPE_LABEL = { expense: 'Expense', receive: 'Receive Fund', transfer: 'Transfer', loan_given: 'Loan given', loan_recovery: 'Loan recovery' };
+// Loans to persons are stored as movements between a company account and the
+// protected LOAN_ACCOUNT (type 'transfer'), so they never count as expenses or
+// funds received. Their kind is derived from the direction.
+export const kindOf = (tx) => (tx.loanId ? (tx.account === LOAN_ACCOUNT ? 'loan_recovery' : 'loan_given') : tx.type);
+const withArticle = (s) => `${/^[AEIOU]/i.test(s) ? 'an' : 'a'} ${s}`;
 const MAX_AMOUNT = 1e12;
 const TX_COLUMNS = [
   'id', 'voucherNo', 'date', 'dateISO', 'description', 'category', 'amount', 'type', 'account', 'toAccount',
-  'tags', 'note', 'documentId', 'reversalOf', 'source', 'fingerprint', 'status', 'autoPosted', 'initiatedBy',
+  'tags', 'note', 'documentId', 'reversalOf', 'loanId', 'source', 'fingerprint', 'status', 'autoPosted', 'initiatedBy',
   'initiatedAt', 'approverId', 'decidedBy', 'decidedAt', 'decisionRemark', 'postedBy', 'postedAt', 'updatedAt',
 ];
 
@@ -27,6 +33,15 @@ const PETTY_CASH_BALANCE_SQL = `(SELECT COALESCE(SUM(CASE
     WHEN t2.type = 'transfer' AND t2.toAccount = ${PC} THEN t2.amount
     WHEN t2.type = 'transfer' AND t2.account = ${PC}   THEN -t2.amount
     ELSE 0 END), 0) FROM transactions t2 WHERE t2.status = 'posted')`;
+
+// Posted amount still owed on one loan, as a SQL expression; `ref` is a bind
+// placeholder or a column reference.
+const LA = `'${LOAN_ACCOUNT}'`;
+const loanOutstandingSql = (ref) => `(SELECT COALESCE(SUM(CASE
+    WHEN t3.toAccount = ${LA} THEN t3.amount
+    WHEN t3.account = ${LA}   THEN -t3.amount
+    ELSE 0 END), 0) FROM transactions t3 WHERE t3.status = 'posted' AND t3.loanId = ${ref})`;
+const drawsLoan = (tx) => !!tx.loanId && tx.account === LOAN_ACCOUNT;
 
 const drawsPettyCash = (tx) => (tx.type === 'expense' || tx.type === 'transfer') && tx.account === PETTY_CASH_ACCOUNT;
 
@@ -63,7 +78,7 @@ export function rowToTx(r) {
     /* ignore */
   }
   const { fingerprint, ...rest } = r;
-  return { ...rest, amount: Number(r.amount), tags, autoPosted: !!r.autoPosted };
+  return { ...rest, kind: kindOf(r), amount: Number(r.amount), tags, autoPosted: !!r.autoPosted };
 }
 
 async function loadTx(db, id) {
@@ -72,14 +87,15 @@ async function loadTx(db, id) {
   return row;
 }
 
-async function nextVoucherNo(db) {
+async function nextNumber(db, name) {
   const row = await db
-    .prepare(
-      "INSERT INTO counters (name, value) VALUES ('voucher', 1) ON CONFLICT(name) DO UPDATE SET value = value + 1 RETURNING value",
-    )
+    .prepare('INSERT INTO counters (name, value) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET value = value + 1 RETURNING value')
+    .bind(name)
     .first();
-  return `ALD-${String(row.value).padStart(6, '0')}`;
+  return row.value;
 }
+const nextVoucherNo = async (db) => `ALD-${String(await nextNumber(db, 'voucher')).padStart(6, '0')}`;
+const nextLoanNo = async (db) => `LN-${String(await nextNumber(db, 'loan')).padStart(4, '0')}`;
 
 export async function eligibleApprovers(db, amount, initiatorId) {
   const { results } = await db
@@ -100,7 +116,7 @@ function eventStmt(db, transactionId, action, actorId, remark = null) {
 }
 
 function describe(tx, symbol) {
-  const what = TYPE_LABEL[tx.type];
+  const what = TYPE_LABEL[kindOf(tx)];
   const where = tx.type === 'transfer' ? `${tx.account} → ${tx.toAccount}` : tx.account;
   return `${what} of ${formatMoney(tx.amount, symbol)} — “${tx.description}” (${where}, dated ${tx.date})`;
 }
@@ -120,21 +136,84 @@ async function checkTagsAllowed(db, user, tags, alreadyOn = []) {
   if (unknown.length) fail(400, `Tag “${unknown[0]}” does not exist. Only Mid Users and Super Users can create new tags.`);
 }
 
-async function validateInput(db, input, settings) {
+async function loadLoan(db, id) {
+  const loan = id ? await db.prepare('SELECT * FROM loans WHERE id = ?').bind(String(id)).first() : null;
+  if (!loan) fail(400, 'Choose a valid loan.');
+  return loan;
+}
+
+// Posted amount still owed on a loan, less recoveries already entered but not
+// yet posted (so two pending recoveries cannot together exceed what is owed).
+export async function loanAvailable(db, loanId) {
+  const row = await db
+    .prepare(
+      `SELECT ${loanOutstandingSql('?1')} AS outstanding,
+              (SELECT COALESCE(SUM(amount), 0) FROM transactions
+                WHERE loanId = ?1 AND account = ${LA} AND status IN ('pending_approval', 'approved')) AS pending`,
+    )
+    .bind(loanId)
+    .first();
+  return { outstanding: round2(row.outstanding), pending: round2(row.pending), available: round2(row.outstanding - row.pending) };
+}
+
+async function validateInput(db, input, settings, { exactDescription = false } = {}) {
   const type = input.type;
-  if (!TYPE_LABEL[type]) fail(400, 'Type must be Expense, Receive Fund or Transfer.');
+  if (!TYPE_LABEL[type]) fail(400, 'Type must be Expense, Receive Fund, Transfer, Loan given or Loan recovery.');
   const amount = parseAmount(input.amount);
   if (amount === null || cents(amount) <= 0) fail(400, 'Enter an amount greater than zero.');
   if (amount > MAX_AMOUNT) fail(400, 'Amount is too large.');
-  const description = cleanText(input.description, 200);
-  if (!description) fail(400, 'Description is required.');
+  let description = cleanText(input.description, 200);
+  // Loan entries always name the borrower; the user's text is kept as a remark.
+  const loanText = (lead) => (exactDescription && description ? description : `${lead}${description ? ` — ${description}` : ''}`.slice(0, 200));
+  const isLoan = type === 'loan_given' || type === 'loan_recovery';
+  if (!description && !isLoan) fail(400, 'Description is required.');
   const dateParts = parseDate(input.date);
   if (!dateParts) fail(400, 'Enter a valid date (DD/MM/YYYY).');
-  const account = cleanText(input.account, 80);
+  let account = cleanText(input.account, 80);
   if (!settings.accounts.includes(account)) fail(400, 'Choose a valid account.');
   let toAccount = null;
   let category;
-  if (type === 'transfer') {
+  let storedType = type;
+  let loanId = null;
+  let newLoan = null;
+  if (type === 'loan_given') {
+    // Money paid out of a company account to a person.
+    if (input.loanId) {
+      const loan = await loadLoan(db, input.loanId);
+      loanId = loan.id;
+      description = loanText(`Loan to ${loan.borrower}`);
+    } else {
+      const borrower = cleanText(input.borrower, 120);
+      if (!borrower) fail(400, 'Enter the name of the person receiving the loan.');
+      const mobile = normalizeMobile(input.borrowerMobile);
+      if (mobile === undefined) fail(400, 'Enter a valid mobile number for the borrower, e.g. 01712345678 (or leave it blank).');
+      newLoan = { borrower, mobile, purpose: description || null };
+      description = loanText(`Loan to ${borrower}`);
+    }
+    storedType = 'transfer';
+    toAccount = LOAN_ACCOUNT;
+    category = 'Loan given';
+  } else if (type === 'loan_recovery') {
+    // Money received back from the person, in full or in part.
+    const loan = await loadLoan(db, input.loanId);
+    loanId = loan.id;
+    const { outstanding, pending, available } = await loanAvailable(db, loan.id);
+    if (cents(amount) > cents(available)) {
+      const sym = settings.currency;
+      fail(
+        400,
+        cents(outstanding) <= 0
+          ? `${loan.loanNo} (${loan.borrower}) has nothing outstanding to recover.`
+          : `The recovery is more than ${loan.borrower} owes. Outstanding on ${loan.loanNo} is ${formatMoney(outstanding, sym)}${cents(pending) > 0 ? `, of which ${formatMoney(pending, sym)} is already entered and awaiting posting` : ''}.`,
+        { reason: 'exceeds_outstanding', outstanding, pending, available },
+      );
+    }
+    description = loanText(`Loan recovery from ${loan.borrower}`);
+    storedType = 'transfer';
+    toAccount = account; // received into this company account
+    account = LOAN_ACCOUNT;
+    category = 'Loan recovery';
+  } else if (type === 'transfer') {
     toAccount = cleanText(input.toAccount, 80);
     if (!settings.accounts.includes(toAccount)) fail(400, 'Choose a valid destination account.');
     if (toAccount === account) fail(400, 'Source and destination accounts must differ.');
@@ -153,7 +232,7 @@ async function validateInput(db, input, settings) {
     if (!doc) fail(400, 'Attached document not found.');
     documentId = doc.id;
   }
-  return { type, amount, description, ...dateParts, account, toAccount, category, tags, note, documentId };
+  return { type: storedType, amount, description, ...dateParts, account, toAccount, category, tags, note, documentId, loanId, newLoan };
 }
 
 // ---- Create ---------------------------------------------------------------
@@ -161,7 +240,7 @@ async function validateInput(db, input, settings) {
 export async function createTransaction(env, user, input, { reversalOf = null, source = 'manual' } = {}) {
   const db = env.DB;
   const settings = await getSettings(db);
-  const tx = await validateInput(db, input, settings);
+  const tx = await validateInput(db, input, settings, { exactDescription: !!reversalOf });
   await checkTagsAllowed(db, user, tx.tags);
   tx.fingerprint = fingerprintOf(tx);
 
@@ -204,6 +283,15 @@ export async function createTransaction(env, user, input, { reversalOf = null, s
   }
 
   const now = nowISO();
+  let createdLoanId = null;
+  if (tx.newLoan) {
+    createdLoanId = uuid();
+    await db
+      .prepare('INSERT INTO loans (id, loanNo, borrower, mobile, purpose, createdBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(createdLoanId, await nextLoanNo(db), tx.newLoan.borrower, tx.newLoan.mobile, tx.newLoan.purpose, user.id, now)
+      .run();
+    tx.loanId = createdLoanId;
+  }
   const row = {
     id: uuid(),
     voucherNo: await nextVoucherNo(db),
@@ -219,6 +307,7 @@ export async function createTransaction(env, user, input, { reversalOf = null, s
     note: tx.note,
     documentId: tx.documentId,
     reversalOf,
+    loanId: tx.loanId || null,
     source,
     fingerprint: tx.fingerprint,
     status: withinLimit ? 'posted' : 'pending_approval',
@@ -234,16 +323,25 @@ export async function createTransaction(env, user, input, { reversalOf = null, s
     updatedAt: now,
   };
 
-  // Posting straight away must never overdraw Petty Cash, even under a race:
-  // the guard is evaluated inside the INSERT itself.
-  const guard = withinLimit && drawsPettyCash(tx) ? ` WHERE ROUND(${PETTY_CASH_BALANCE_SQL} * 100) >= ?` : '';
+  // Posting straight away must never overdraw Petty Cash or recover more than a
+  // loan's outstanding amount, even under a race: the guard is evaluated inside
+  // the INSERT itself.
   const binds = TX_COLUMNS.map((c) => row[c]);
-  if (guard) binds.push(cents(tx.amount));
+  let guard = '';
+  if (withinLimit && drawsPettyCash(row)) {
+    guard = ` WHERE ROUND(${PETTY_CASH_BALANCE_SQL} * 100) >= ?`;
+    binds.push(cents(tx.amount));
+  } else if (withinLimit && drawsLoan(row)) {
+    guard = ` WHERE ROUND(${loanOutstandingSql('?')} * 100) >= ?`;
+    binds.push(row.loanId, cents(tx.amount));
+  }
   const res = await db
     .prepare(`INSERT INTO transactions (${TX_COLUMNS.join(', ')}) SELECT ${TX_COLUMNS.map(() => '?').join(', ')}${guard}`)
     .bind(...binds)
     .run();
   if (!res.meta.changes) {
+    if (createdLoanId) await db.prepare('DELETE FROM loans WHERE id = ?').bind(createdLoanId).run();
+    if (drawsLoan(row)) return { ok: false, reason: 'exceeds_outstanding', message: 'The recovery is more than the amount outstanding on this loan.' };
     return { ok: false, reason: 'insufficient_petty_cash', message: 'Petty Cash balance is not enough for this payment.' };
   }
 
@@ -264,7 +362,7 @@ export async function createTransaction(env, user, input, { reversalOf = null, s
         userId: approver.id,
         kind: 'approval_request',
         title: `Approval required: ${row.voucherNo}`,
-        body: `${user.fullName} initiated an ${describe(row, sym)}, which exceeds their financial limit of ${formatMoney(user.financialLimit, sym)}. Please review and approve or reject.`,
+        body: `${user.fullName} initiated ${withArticle(describe(row, sym))}, which exceeds their financial limit of ${formatMoney(user.financialLimit, sym)}. Please review and approve or reject.`,
         transactionId: row.id,
         actionable: true,
       }),
@@ -337,7 +435,11 @@ export async function postTransaction(env, user, id) {
   if (tx.initiatedBy !== user.id) fail(403, 'Only the user who initiated this transaction can post it.');
   if (tx.status !== 'approved') fail(409, 'Only approved transactions can be posted.');
   const now = nowISO();
-  const guard = drawsPettyCash(tx) ? ` AND ROUND(${PETTY_CASH_BALANCE_SQL} * 100) >= ROUND(amount * 100)` : '';
+  const guard = drawsPettyCash(tx)
+    ? ` AND ROUND(${PETTY_CASH_BALANCE_SQL} * 100) >= ROUND(amount * 100)`
+    : drawsLoan(tx)
+      ? ` AND ROUND(${loanOutstandingSql('transactions.loanId')} * 100) >= ROUND(amount * 100)`
+      : '';
   const res = await db
     .prepare(
       `UPDATE transactions SET status = 'posted', postedBy = ?, postedAt = ?, updatedAt = ?
@@ -353,6 +455,13 @@ export async function postTransaction(env, user, id) {
       fail(409, `Petty Cash balance is ${formatMoney(balance, sym)} — not enough to post this payment. Fund Petty Cash first.`, {
         reason: 'insufficient_petty_cash',
         balance,
+      });
+    }
+    if (fresh.status === 'approved' && drawsLoan(fresh)) {
+      const { outstanding } = await loanAvailable(db, fresh.loanId);
+      fail(409, `Only ${formatMoney(outstanding, sym)} is outstanding on this loan now, so this recovery cannot be posted. Withdraw it and enter the correct amount.`, {
+        reason: 'exceeds_outstanding',
+        outstanding,
       });
     }
     fail(409, 'This transaction was changed by someone else. Refresh and try again.');
@@ -447,7 +556,7 @@ export async function rerouteTransaction(env, user, id, approverId) {
       userId: approver.id,
       kind: 'approval_request',
       title: `Approval required: ${tx.voucherNo}`,
-      body: `${user.fullName} initiated an ${describe(tx, sym)}, which exceeds their financial limit. Please review and approve or reject.`,
+      body: `${user.fullName} initiated ${withArticle(describe(tx, sym))}, which exceeds their financial limit. Please review and approve or reject.`,
       transactionId: id,
       actionable: true,
     }),
@@ -469,8 +578,13 @@ export async function reverseTransaction(env, user, id, input = {}) {
     .first();
   if (existing) fail(409, `This transaction already has a reversal entry (${existing.voucherNo}).`);
   const today = parseDate(new Date().toISOString().slice(0, 10));
-  const reversed =
-    tx.type === 'transfer'
+  // A loan payment is reversed by a recovery into the same account, and a
+  // recovery by paying the same amount back out to the borrower.
+  const reversed = tx.loanId
+    ? tx.account === LOAN_ACCOUNT
+      ? { type: 'loan_given', loanId: tx.loanId, account: tx.toAccount }
+      : { type: 'loan_recovery', loanId: tx.loanId, account: tx.account }
+    : tx.type === 'transfer'
       ? { type: 'transfer', account: tx.toAccount, toAccount: tx.account }
       : { type: tx.type === 'expense' ? 'receive' : 'expense', account: tx.account, category: tx.category };
   return createTransaction(
@@ -565,4 +679,42 @@ export async function visibleTransactions(db, user) {
           .bind(user.id, user.id, user.id);
   const { results } = await stmt.all();
   return results.map(rowToTx);
+}
+
+// ---- Loans to persons -------------------------------------------------------------
+
+// Every loan with its posted totals. A reversal of a payment reduces what was
+// given, and a reversal of a recovery reduces what was recovered. Loans whose
+// payment is still unposted are shown only to the people involved (and Super Users).
+export async function listLoans(db, user) {
+  const { results } = await db
+    .prepare(
+      `SELECT l.*,
+          COALESCE(SUM(CASE WHEN t.status = 'posted' AND t.toAccount = ${LA} AND t.reversalOf IS NULL THEN t.amount END), 0)
+        - COALESCE(SUM(CASE WHEN t.status = 'posted' AND t.account = ${LA} AND t.reversalOf IS NOT NULL THEN t.amount END), 0) AS given,
+          COALESCE(SUM(CASE WHEN t.status = 'posted' AND t.account = ${LA} AND t.reversalOf IS NULL THEN t.amount END), 0)
+        - COALESCE(SUM(CASE WHEN t.status = 'posted' AND t.toAccount = ${LA} AND t.reversalOf IS NOT NULL THEN t.amount END), 0) AS recovered,
+          COALESCE(SUM(CASE WHEN t.status IN ('pending_approval', 'approved') AND t.toAccount = ${LA} THEN t.amount END), 0) AS pendingGiven,
+          COALESCE(SUM(CASE WHEN t.status IN ('pending_approval', 'approved') AND t.account = ${LA} THEN t.amount END), 0) AS pendingRecovery,
+          MIN(CASE WHEN t.status = 'posted' THEN t.dateISO END) AS firstDate,
+          MAX(CASE WHEN t.status = 'posted' THEN t.dateISO END) AS lastDate,
+          MAX(CASE WHEN t.initiatedBy = ? OR t.approverId = ? OR t.decidedBy = ? THEN 1 ELSE 0 END) AS involved
+         FROM loans l
+         LEFT JOIN transactions t ON t.loanId = l.id AND t.status NOT IN ('rejected', 'cancelled')
+        GROUP BY l.id
+        ORDER BY l.createdAt DESC`,
+    )
+    .bind(user.id, user.id, user.id)
+    .all();
+  return results
+    .map((r) => {
+      const given = round2(r.given);
+      const recovered = round2(r.recovered);
+      const outstanding = round2(given - recovered);
+      const pendingGiven = round2(r.pendingGiven);
+      const status = cents(outstanding) > 0 ? 'active' : cents(given) > 0 ? 'closed' : cents(pendingGiven) > 0 ? 'awaiting' : 'void';
+      return { ...r, given, recovered, outstanding, pendingGiven, pendingRecovery: round2(r.pendingRecovery), status, involved: !!r.involved };
+    })
+    .filter((l) => user.role === 'superuser' || cents(l.given) > 0 || l.recovered || l.involved || l.createdBy === user.id)
+    .map(({ involved, ...l }) => l);
 }

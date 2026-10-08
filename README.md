@@ -42,6 +42,7 @@ User initiates (Expense / Receive Fund / Transfer)
 - The initiator can **withdraw** an unposted entry or **change the approver**. If an approver is disabled, everyone waiting on them is told to re-route.
 - Posted entries are never edited or deleted. A **reversal** creates a new opposite entry that goes through the same limit rules.
 - Only **posted** entries count toward totals, balances, budgets and statements.
+- **Loans to persons:** *Loan given* pays money to a person and *Loan recovery* records it coming back, in full or in parts on different dates. Both follow the same limit and approval rules. They are stored as movements between a company account and the protected **Loans to persons** account, linked to a loan record (`loans` table, `transactions.loanId`), so they never count as expenses or funds received. A recovery can never exceed what is outstanding: this is checked when it is entered (pending recoveries count too) and again at posting.
 - Terminology follows the brief: **Description** replaces *Merchant*, and **Receive Fund** replaces *Income*.
 
 ## Features
@@ -51,6 +52,7 @@ User initiates (Expense / Receive Fund / Transfer)
 - Approvals: Awaiting my approval, Ready for my final posting, My requests, and (for Super Users) everything still unposted in the company
 - Financial Limits page (Super Users) with limit history
 - Users page (Admin) and an Audit Trail (Admin and Super Users)
+- Loans page: every loan with paid out, recovered and outstanding amounts, Give a loan / Record recovery / Pay more, and a printable loan statement per person
 - Budgets, Documents (R2 voucher attachments), and tags, categories and accounts
 - Printable **Ledger Statement** showing the company name, credit/debit/net/Petty Cash boxes (plus opening and closing balance for a single account), Debit/Credit columns, a category summary and signature lines
 - Petty Cash: a protected system account whose balance comes from the ledger. It can never go negative; this is checked when an entry is made and again at final posting.

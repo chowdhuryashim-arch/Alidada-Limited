@@ -305,6 +305,8 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .hbar { display: grid; grid-template-columns: minmax(90px, 150px) 1fr auto; gap: 10px; align-items: center; margin: 9px 0; font-size: 13px; }
 .hbar .track { height: 10px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
 .hbar .fill { height: 100%; border-radius: 0 4px 4px 0; background: var(--series-1); }
+.loan-track { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin: 4px 0 12px; }
+.loan-track > div { height: 100%; background: var(--positive); }
 .hbar .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
 .progress { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
 .progress > div { height: 100%; border-radius: 0 4px 4px 0; background: var(--positive); }
@@ -386,4 +388,7 @@ table.tbl { width: 100%; border-collapse: collapse; }
   .mobile-tabs a.active { color: var(--accent); background: var(--accent-soft); }
   .mobile-tabs .badge { position: absolute; top: 0; right: 8px; height: 16px; min-width: 16px; font-size: 10px; padding: 0 4px; }
   .hide-mobile { display: none !important; }
+  td.show-mobile { display: table-cell !important; }
+  div.show-mobile { display: block !important; }
 }
+.show-mobile { display: none; }

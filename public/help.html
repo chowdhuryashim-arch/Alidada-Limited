@@ -91,11 +91,23 @@
         <li><b>Receive Fund</b> — money coming into an account (a credit).</li>
         <li><b>Expense</b> — money paid out of an account (a debit).</li>
         <li><b>Transfer</b> — movement between two company accounts, e.g. bank → Petty Cash. Not counted as received or spent.</li>
+        <li><b>Loan given / Loan recovery</b> — money lent to a person, and money received back from them. Not counted as received or spent; held in the <b>Loans to persons</b> account until recovered.</li>
         <li><b>Voucher no.</b> — the unique reference (ALD-000123) given to every entry.</li>
       </ul>
 
       <h2>6. Petty Cash</h2>
       <p>Petty Cash is a protected system account that cannot be removed. Its balance is always computed from posted entries and can never go negative: an expense or transfer out of Petty Cash larger than its balance is refused, both when it is entered and at final posting. Fund it with a <b>Transfer</b> from another account (Dashboard → “Fund Petty Cash”).</p>
+
+      <h3>Loans to a person</h3>
+      <p>Use <b>Loans</b> when the company pays money to a person (an employee advance, a personal loan) that will be paid back. A loan is <b>not an expense and not a fund received</b>: the money moves into the protected <b>Loans to persons</b> account and comes back out of it as it is recovered, so income, expenses and budgets are never affected.</p>
+      <ol>
+        <li><b>Give a loan.</b> Open <b>Loans → Give a loan</b>. Enter the borrower’s name (and mobile, optional), the amount, the date, the account it is paid from, and a purpose if you like. Each loan gets a number such as <b>LN-0001</b>.</li>
+        <li><b>Record a recovery.</b> When the person pays back, open the loan and click <b>Record recovery</b>, or use <b>Loans → Record recovery</b>. Enter the amount received, the date and the account it was received into. You can recover <b>in full or in parts on different dates</b>; <i>Recover in full</i> fills in the whole outstanding amount.</li>
+        <li><b>Outstanding.</b> The Loans page shows, for every loan, what was paid out, what has been recovered and what is still outstanding. A loan closes as <b>Fully recovered</b> when nothing is left.</li>
+        <li><b>Pay more.</b> To lend the same person more on the same loan, open it and click <b>Pay more</b>. For a separate loan, use Give a loan again.</li>
+        <li><b>Print loan statement</b> from the loan gives a statement for that person with every payment and recovery, the running outstanding balance and a space for the borrower’s signature.</li>
+      </ol>
+      <p>Loan payments and recoveries follow the <b>same financial-limit rules</b> as every other entry: within your limit they post immediately, beyond it they go for approval and come back to you for final posting. Only posted entries change the outstanding amount. A recovery can never be more than is outstanding (recoveries already entered but not yet posted count too), and a loan paid from Petty Cash can never overdraw it. A mistake is corrected with <b>Reverse</b> on the entry, as usual.</p>
 
       <h2>7. Duplicate caution</h2>
       <p>If a new entry has the same date, description, amount, account and type as an existing one, the form shows the match and changes the button to <b>Add anyway</b>. Nothing is blocked — you decide.</p>
@@ -105,7 +117,7 @@
 
       <h2>9. For the Admin</h2>
       <ol>
-        <li>Open <b>Users → New user</b>, choose <b>User</b> or <b>Super User</b>, enter name, designation, username and a temporary password.</li>
+        <li>Open <b>Users → New user</b>, choose <b>User</b>, <b>Mid User</b> or <b>Super User</b>, enter the mobile number, enter name, designation, username and a temporary password.</li>
         <li>Share the username and temporary password privately. The person must set their own password at first sign-in.</li>
         <li>Create at least two Super Users so that they can assign each other’s limits.</li>
         <li>Disabling a user signs them out immediately and asks anyone waiting on their approval to choose another approver.</li>

@@ -3,6 +3,9 @@ import SCHEMA_SQL from '../schema/schema.sql';
 import { uuid, nowISO } from './util.js';
 
 export const PETTY_CASH_ACCOUNT = 'Petty Cash';
+// Protected system account holding money lent to persons until it is recovered.
+// It never appears in the account lists; only loan entries move money through it.
+export const LOAN_ACCOUNT = 'Loans to persons';
 
 // Starter lookup configuration only — never financial records or balances.
 export const DEFAULT_SETTINGS = {
@@ -52,6 +55,8 @@ export async function ensureSchema(db) {
       await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
     }
   }
+  // Indexes on added columns (they cannot live in schema.sql, which runs first).
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tx_loan ON transactions (loanId, status)').run();
   schemaReady = true;
 }
 
@@ -60,6 +65,7 @@ const ADDED_COLUMNS = [
   ['users', 'tier', 'TEXT'],
   ['notifications', 'pushStatus', 'TEXT'],
   ['notifications', 'pushDetail', 'TEXT'],
+  ['transactions', 'loanId', 'TEXT'],
 ];
 
 // Messages that are worth a phone alert: the ones asking someone to act, or
@@ -78,6 +84,7 @@ export async function getSettings(db) {
     }
   }
   if (!out.accounts.includes(PETTY_CASH_ACCOUNT)) out.accounts.push(PETTY_CASH_ACCOUNT);
+  out.accounts = out.accounts.filter((a) => a !== LOAN_ACCOUNT);
   return out;
 }
 

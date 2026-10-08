@@ -19,6 +19,7 @@ import {
   auditStmt,
   publicUser,
   PETTY_CASH_ACCOUNT,
+  LOAN_ACCOUNT,
   SETTING_KEYS,
   effectiveRole,
   canManageLists,
@@ -37,6 +38,7 @@ import {
   pettyCashBalance,
   accountBalances,
   rowToTx,
+  listLoans,
 } from './ledger.js';
 import { listUsers, createUser, updateUser, resetPassword, setFinancialLimit, limitHistory } from './users.js';
 import { HttpError, json, fail, readJson, uuid, nowISO, cleanText, parseAmount } from './util.js';
@@ -370,7 +372,7 @@ async function api(request, env, user, path, method, url) {
   requireFinancial(user);
 
   if (path === '/api/state' && method === 'GET') {
-    const [transactions, settings, tags, docs, directory, pettyCash, balances] = await Promise.all([
+    const [transactions, settings, tags, docs, directory, pettyCash, balances, loans] = await Promise.all([
       visibleTransactions(db, user),
       getSettings(db),
       db.prepare('SELECT name FROM tags ORDER BY name').all(),
@@ -380,6 +382,7 @@ async function api(request, env, user, path, method, url) {
         .all(),
       pettyCashBalance(db),
       accountBalances(db),
+      listLoans(db, user),
     ]);
     return json({
       ok: true,
@@ -390,6 +393,8 @@ async function api(request, env, user, path, method, url) {
       directory: directory.results.map(({ tier, ...u }) => ({ ...u, role: effectiveRole({ ...u, tier }), active: !!u.active, financialLimit: Number(u.financialLimit) })),
       pettyCash,
       balances,
+      loans,
+      loanAccount: LOAN_ACCOUNT,
       documentsEnabled: !!env.BUCKET,
     });
   }
@@ -450,7 +455,7 @@ async function api(request, env, user, path, method, url) {
     if (!canManageLists(user)) fail(403, 'Only Mid Users and Super Users can add categories.');
     const name = cleanText((await readJson(request)).name, 80);
     if (!name) fail(400, 'Category name is required.');
-    if (name === 'Transfer') fail(400, '“Transfer” is reserved for transfers between accounts.');
+    if (['transfer', 'loan given', 'loan recovery'].includes(name.toLowerCase())) fail(400, `“${name}” is reserved by the system.`);
     const settings = await getSettings(db);
     if (settings.categories.some((c) => c.toLowerCase() === name.toLowerCase())) fail(409, 'That category already exists.');
     await db.batch([putSettingStmt(db, 'categories', [...settings.categories, name]), auditStmt(db, user, 'category.added', name)]);
@@ -497,12 +502,12 @@ function validateSetting(key, value) {
   };
   switch (key) {
     case 'categories': {
-      const list = uniqList(value, 200).filter((c) => c !== 'Transfer');
+      const list = uniqList(value, 200).filter((c) => !['Transfer', 'Loan given', 'Loan recovery'].includes(c));
       if (!list.includes('Needs review')) list.push('Needs review');
       return list;
     }
     case 'accounts': {
-      const list = uniqList(value, 100);
+      const list = uniqList(value, 100).filter((a) => a.toLowerCase() !== LOAN_ACCOUNT.toLowerCase()); // reserved for loans
       if (!list.includes(PETTY_CASH_ACCOUNT)) list.push(PETTY_CASH_ACCOUNT); // protected system account
       return list;
     }
@@ -574,7 +579,7 @@ async function documents(request, env, user, seg, method) {
 // ---- Backup & restore ----------------------------------------------------------------
 // A backup is pure financial data: it never contains users, passwords or sessions.
 
-const BACKUP_TABLES = ['transactions', 'transaction_events', 'tags', 'settings', 'documents', 'counters', 'limit_history'];
+const BACKUP_TABLES = ['transactions', 'transaction_events', 'loans', 'tags', 'settings', 'documents', 'counters', 'limit_history'];
 
 async function backup(env, user) {
   const db = env.DB;

@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   note           TEXT,
   documentId     TEXT,
   reversalOf     TEXT,
+  loanId         TEXT,                          -- loans to persons: the loan this entry belongs to
   source         TEXT NOT NULL DEFAULT 'manual',
   fingerprint    TEXT NOT NULL,
   status         TEXT NOT NULL CHECK (status IN ('pending_approval', 'approved', 'posted', 'rejected', 'cancelled')),
@@ -73,6 +74,19 @@ CREATE INDEX IF NOT EXISTS idx_tx_status_date ON transactions (status, dateISO);
 CREATE INDEX IF NOT EXISTS idx_tx_fingerprint ON transactions (fingerprint);
 CREATE INDEX IF NOT EXISTS idx_tx_approver ON transactions (approverId, status);
 CREATE INDEX IF NOT EXISTS idx_tx_initiator ON transactions (initiatedBy, status);
+
+-- Loans to persons. Money paid out and recovered is held in the protected
+-- "Loans to persons" account (as a movement between accounts), so it is never
+-- counted as an expense or as funds received. Amounts live in transactions.
+CREATE TABLE IF NOT EXISTS loans (
+  id        TEXT PRIMARY KEY,
+  loanNo    TEXT NOT NULL UNIQUE,                -- LN-0001
+  borrower  TEXT NOT NULL,
+  mobile    TEXT,
+  purpose   TEXT,
+  createdBy TEXT NOT NULL,
+  createdAt TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS transaction_events (
   id            TEXT PRIMARY KEY,
