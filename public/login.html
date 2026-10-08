@@ -35,9 +35,13 @@
         <label>Password<input name="password" id="p" type="password" autocomplete="current-password" required /></label>
         <button id="b" type="submit">Sign in</button>
         <div class="small">Forgot your password? Ask the Admin to reset it.</div>
+        <div class="small" id="ver"></div>
       </form>
     </section>
     <script>
+      fetch('/api/meta').then((r) => r.json()).then((m) => {
+        if (m && m.version && m.version !== 'not stamped') document.getElementById('ver').textContent = 'Version ' + m.version;
+      }).catch(() => {});
       document.getElementById('f').addEventListener('submit', async (e) => {
         e.preventDefault();
         const b = document.getElementById('b');

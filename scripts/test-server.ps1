@@ -63,6 +63,27 @@ if (-not (Test-Path 'node_modules\wrangler') -and -not (Test-Path 'node_modules/
   & npm install --no-audit --no-fund
 }
 
+# ---- 0. Make sure this PC has the latest code from GitHub ------------------------
+Say 'Checking this copy of the code is up to date'
+$Branch = 'claude/alidada-ledger-book-inbcpr'
+$here = (& git rev-parse --abbrev-ref HEAD 2>$null)
+if ($LASTEXITCODE -ne 0) { Fail 'This folder is not a git copy of the Ledger Book, so it cannot be updated. Clone it again with git (see the README).' }
+if ("$here".Trim() -ne $Branch) { Fail "This folder is on branch '$here', not the Ledger Book branch. Run:  git stash   then   git checkout $Branch   then   git pull" }
+& git fetch -q origin
+if ($LASTEXITCODE -ne 0) { Fail 'Could not reach GitHub (git fetch failed). Check the internet connection and try again.' }
+$behind = (& git rev-list --count 'HEAD..@{u}' 2>$null)
+if ($LASTEXITCODE -ne 0) { Fail 'This folder is not on the Ledger Book branch. Run:  git checkout claude/alidada-ledger-book-inbcpr' }
+if ([int]$behind -gt 0) {
+  Fail "This copy is $behind update(s) behind GitHub, so the test server would get old code. Run:  git stash   then   git pull   and run this script again."
+}
+$dirty = (& git status --porcelain --untracked-files=no)
+if ($dirty) {
+  Write-Host '  Note: program files on this PC have local edits (shown by "git status"). They will be included in this test deploy.' -ForegroundColor Yellow
+}
+$Version = (& git rev-parse --short HEAD).Trim()
+if ($dirty) { $Version = "$Version+local" }
+Write-Host "  Code version: $Version"
+
 Say 'Checking your Cloudflare sign-in'
 Wr whoami
 
@@ -158,8 +179,11 @@ if ($Reset) {
 Say 'Creating tables (safe to repeat)'
 Wr d1 execute $Db --remote --file=schema/schema.sql --yes -c $Cfg
 
-Say "Deploying the test server ($Worker)"
-Wr deploy -c $Cfg
+Say "Deploying the test server ($Worker), version $Version"
+$deployLines = @()
+& npx --yes wrangler deploy -c $Cfg --var "APP_VERSION:$Version" | ForEach-Object { Write-Host $_; $deployLines += "$_" }
+if ($LASTEXITCODE -ne 0) { Fail 'The deploy failed - see the message above (a "fetch failed" network error can simply be retried).' }
+$TestUrl = ([regex]::Match(($deployLines -join "`n"), 'https://[a-z0-9.-]+\.workers\.dev')).Value
 
 Say 'Secret keys'
 # The secrets can only go onto a Worker that deploy actually created; otherwise
@@ -195,9 +219,24 @@ Say 'Phone notifications'
 & node scripts/setup-push.mjs --test
 if ($LASTEXITCODE -ne 0) { Write-Host '  Phone notifications were not switched on - run: node scripts/setup-push.mjs --test' -ForegroundColor Yellow }
 
+# ---- 7. Confirm the test server really runs this version ---------------------------
+$Verified = $false
+if ($TestUrl) {
+  Say "Checking $TestUrl"
+  for ($try = 1; -not $Verified -and $try -le 5; $try++) {
+    try {
+      $meta = Invoke-RestMethod -Uri "$TestUrl/api/meta" -TimeoutSec 20 -Headers @{ 'Cache-Control' = 'no-cache' }
+      if ($meta.version -eq $Version) { $Verified = $true } else { Start-Sleep -Seconds 3 }
+    } catch { Start-Sleep -Seconds 3 }
+  }
+  if ($Verified) { Write-Host "  The test server is running version $Version." -ForegroundColor Green }
+  else { Write-Host "  Could not confirm the version yet. Open $TestUrl/api/meta - it should show `"version`":`"$Version`"." -ForegroundColor Yellow }
+}
+
 Write-Host "`n==================================================================" -ForegroundColor Green
 Write-Host ' TEST server is ready.' -ForegroundColor Green
-Write-Host " Address:   https://$Worker.<your-subdomain>.workers.dev (shown above)"
+Write-Host " Address:   $(if ($TestUrl) { $TestUrl } else { "https://$Worker.<your-subdomain>.workers.dev" })"
+Write-Host " Version:   $Version$(if ($Verified) { '  (confirmed on the server)' })"
 if ($saved['BOOTSTRAP_KEY']) {
   Write-Host " Setup key: $($saved['BOOTSTRAP_KEY'])   (use it on the /setup page)"
 } else {

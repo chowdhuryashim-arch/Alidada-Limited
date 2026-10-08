@@ -364,6 +364,7 @@
     S.company = r.company;
     S.currency = r.currency || S.currency;
     S.pushKey = r.pushKey || null;
+    S.version = r.version || '';
     const prevUnread = S.counts.unread;
     S.counts = { unread: r.unread, toApprove: r.toApprove, toPost: r.toPost };
     return { prevUnread };
@@ -1754,6 +1755,7 @@
             <dt>Role</dt><dd><span class="chip role">${ROLE_LABEL[u.role]}</span></dd>
             <dt>Financial limit</dt><dd>${u.role === 'admin' ? 'None — the Admin has no financial authority' : `${money(u.financialLimit)}${u.limitSetBy ? ` <span class="muted small">· set by ${esc(userName(u.limitSetBy))} on ${esc(fmtDateTime(u.limitSetAt))}</span>` : ''}`}</dd>
             <dt>Company</dt><dd>${esc(S.company)}</dd>
+            <dt>Version</dt><dd><code>${esc(S.version || 'not stamped')}</code></dd>
           </dl>
           <div class="row" style="margin-top:14px">
             <button class="btn" data-act="change-password">${icon('key')}Change password</button>

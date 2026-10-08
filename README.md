@@ -106,7 +106,7 @@ npm run test-server          # create or update the test server (safe to repeat)
 npm run test-server:reset    # delete ALL test data and start again from /setup
 ```
 
-The script creates the test database, writes a git-ignored `wrangler.test.toml`, creates the tables, deploys `alidada-test`, and sets its keys. It prints the test setup key, which is also saved in the git-ignored `.test-secrets`. After changing code, run `npm run test-server` again to put the new version on the test server first. When it looks right, run `npx wrangler deploy` to update live.
+The script creates the test database, writes a git-ignored `wrangler.test.toml`, creates the tables, deploys `alidada-test`, and sets its keys. It prints the test setup key, which is also saved in the git-ignored `.test-secrets`. It first checks that this PC has the latest code from GitHub (it stops and says `git stash` then `git pull` if not), stamps the deploy with the code version (the git commit), and then confirms the test server is really running that version. You can check any time at `https://alidada-test.<subdomain>.workers.dev/api/meta` (`"version"`), or in Settings → Version. After changing code, run `npm run test-server` again to put the new version on the test server first. When it looks right, run `npx wrangler deploy` to update live.
 
 ## Local development and tests
 

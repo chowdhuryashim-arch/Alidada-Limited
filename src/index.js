@@ -83,6 +83,9 @@ export default {
   },
 };
 
+// The code version (git commit) a deploy was made from, stamped by the deploy
+// scripts with --var APP_VERSION:<commit>. Lets anyone check what a server runs.
+const appVersion = (env) => cleanText(env.APP_VERSION, 40) || 'not stamped';
 const companyName = (env) => cleanText(env.COMPANY_NAME, 80) || 'ALIDADA Limited';
 
 async function handle(request, env) {
@@ -101,7 +104,7 @@ async function handle(request, env) {
 
   // ---- Public routes ------------------------------------------------------
   if (path === '/api/meta' && method === 'GET') {
-    return json({ ok: true, company: companyName(env), environment: env.APP_ENV || 'production', setupRequired: await setupRequired(env.DB) });
+    return json({ ok: true, company: companyName(env), environment: env.APP_ENV || 'production', version: appVersion(env), setupRequired: await setupRequired(env.DB) });
   }
   if (path === '/api/login' && method === 'POST') return login(request, env);
   if (path === '/api/setup' && method === 'POST') return setup(request, env);
@@ -277,7 +280,7 @@ async function api(request, env, user, path, method, url) {
       .bind(user.id)
       .first();
     const settings = await getSettings(db);
-    return json({ ok: true, company: companyName(env), environment: env.APP_ENV || 'production', user: publicUser(user), currency: settings.currency, pushKey: pushPublicKey(env), ...counts });
+    return json({ ok: true, company: companyName(env), environment: env.APP_ENV || 'production', version: appVersion(env), user: publicUser(user), currency: settings.currency, pushKey: pushPublicKey(env), ...counts });
   }
 
   // Phone browser notifications (every role)
