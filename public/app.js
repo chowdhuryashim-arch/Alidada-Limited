@@ -1031,11 +1031,13 @@
           <button data-t="transfer">${icon('transfer')}Transfer</button>`
           }
         </div>
+        ${loanMode ? '' : `<div class="small muted" style="margin-top:-6px">Loan to a person? <a href="#" data-loanmode="loan_given">Give loan</a> · <a href="#" data-loanmode="loan_recovery">Loan recovery</a></div>`}
         <div id="ae-loan"></div>
         <div class="grid-2">
           <label class="field"><span>Amount (${esc(S.currency)}) *</span><input class="input num" id="ae-amount" inputmode="decimal" placeholder="0.00" autocomplete="off"></label>
           <label class="field"><span>Date (DD/MM/YYYY) *</span><input class="input num" id="ae-date" inputmode="numeric" value="${todayDMY()}" maxlength="10" autocomplete="off"></label>
         </div>
+        <div id="ae-excess"></div>
         <label class="field"><span id="ae-desc-label">Description *</span><input class="input" id="ae-desc" maxlength="200" placeholder="e.g. Office rent for September, payment from customer…"></label>
         <div class="grid-2">
           <label class="field" id="ae-cat-wrap"><span>Category</span><select class="input" id="ae-cat">${st.categories.map((c) => `<option${c === 'Needs review' ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
@@ -1060,32 +1062,68 @@
       if (t === 'loan_given' && fixedLoan) {
         box.innerHTML = `<div class="alert info">${icon('loan')}<span>Further payment on <b>${esc(fixedLoan.loanNo)}</b> to <b>${esc(fixedLoan.borrower)}</b>. Outstanding now ${esc(money(fixedLoan.outstanding))}.</span></div>`;
       } else if (t === 'loan_given') {
+        const names = [...new Set(S.data.loans.map((l) => l.borrower))].sort((a, b) => a.localeCompare(b));
         box.innerHTML = `<div class="grid-2">
-            <label class="field"><span>Borrower (person) *</span><input class="input" id="ae-borrower" maxlength="120" placeholder="Full name of the person" autocomplete="off"></label>
+            <label class="field"><span>Borrower (person) *</span><input class="input" id="ae-borrower" maxlength="120" placeholder="Full name of the person" autocomplete="off" list="ae-borrowers"></label>
             <label class="field"><span>Borrower mobile</span><input class="input" id="ae-bmobile" inputmode="tel" maxlength="20" placeholder="01XXXXXXXXX (optional)" autocomplete="off"></label>
-          </div>`;
+          </div>
+          <datalist id="ae-borrowers">${names.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
+          <div id="ae-same"></div>`;
+        // Typing the name of someone who already owes money offers that loan instead.
+        $('#ae-borrower', el).addEventListener('input', (e) => {
+          const name = e.target.value.trim().toLowerCase();
+          const open = name ? S.data.loans.filter((l) => l.borrower.toLowerCase() === name && l.outstanding > 0) : [];
+          $('#ae-same', el).innerHTML = open.length
+            ? `<div class="alert info">${icon('loan')}<span>${esc(open[0].borrower)} already has ${open.map((l) => `<b>${esc(l.loanNo)}</b> (outstanding ${esc(money(l.outstanding))})`).join(', ')}. Saving creates a separate new loan. <a href="#" id="ae-paymore">Pay more on ${esc(open[0].loanNo)} instead</a></span></div>`
+            : '';
+          $('#ae-paymore', el)?.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            m.close();
+            openAddEntry({ type: 'loan_given', loanId: open[0].id });
+          });
+          resetForce();
+        });
+        $('#ae-bmobile', el).addEventListener('input', resetForce);
       } else if (t === 'loan_recovery') {
-        const list = activeLoans();
+        // Only people who were given a loan and still owe money can be chosen.
+        const list = activeLoans().sort((a, b) => a.borrower.localeCompare(b.borrower) || a.loanNo.localeCompare(b.loanNo));
         const sel = preset.loanId || list[0]?.id;
         box.innerHTML = list.length
-          ? `<label class="field"><span>Loan *</span><select class="input" id="ae-loanid">${list.map((l) => `<option value="${l.id}"${l.id === sel ? ' selected' : ''}>${esc(l.loanNo)} · ${esc(l.borrower)} — outstanding ${esc(money(l.outstanding))}</option>`).join('')}</select></label>
+          ? `<label class="field"><span>Borrower (loan given to) *</span><select class="input" id="ae-loanid">${list.map((l) => `<option value="${l.id}"${l.id === sel ? ' selected' : ''}>${esc(l.borrower)} — ${esc(l.loanNo)} · given ${esc(money(l.given))} · outstanding ${esc(money(l.outstanding))}</option>`).join('')}</select></label>
              <div class="small muted" id="ae-loan-hint" style="margin:-4px 0 6px"></div>`
-          : `<div class="alert caution">${icon('alert')}<span>There is no loan with an outstanding amount to recover.</span></div>`;
+          : `<div class="alert caution">${icon('alert')}<span>Nobody has a loan outstanding, so there is nothing to recover. A recovery can only be recorded against a person who was given a loan.</span></div>`;
         const hint = () => {
-          const l = S.data.loans.find((x) => x.id === $('#ae-loanid', el)?.value);
+          const l = selectedLoan();
           if (!l) return;
-          const avail = l.outstanding - l.pendingRecovery;
-          $('#ae-loan-hint', el).innerHTML = `Recover in full or in part, up to ${esc(money(avail))}${l.pendingRecovery > 0 ? ` (${esc(money(l.pendingRecovery))} already entered, awaiting posting)` : ''}. <a href="#" id="ae-full">Recover in full</a>`;
+          const avail = loanAvailable(l);
+          $('#ae-loan-hint', el).innerHTML = `${l.mobile ? `${esc(l.mobile)} · ` : ''}Recover in full or in part, up to ${esc(money(avail))}${l.pendingRecovery > 0 ? ` (${esc(money(l.pendingRecovery))} already entered, awaiting posting)` : ''}. <a href="#" id="ae-full">Recover in full</a>`;
           $('#ae-full', el).addEventListener('click', (e) => {
             e.preventDefault();
             $('#ae-amount', el).value = avail.toFixed(2);
             checkAuthority();
+            checkExcess();
           });
         };
-        $('#ae-loanid', el)?.addEventListener('change', () => (hint(), resetForce()));
+        $('#ae-loanid', el)?.addEventListener('change', () => (hint(), checkExcess(), resetForce()));
         hint();
       } else box.innerHTML = '';
+      checkExcess();
     };
+    const selectedLoan = () => S.data.loans.find((x) => x.id === $('#ae-loanid', el)?.value);
+    const loanAvailable = (l) => Math.max(0, cents(l.outstanding - l.pendingRecovery) / 100);
+    const enteredAmount = () => Number($('#ae-amount', el).value.replace(/[,\s]/g, ''));
+    // A recovery can never be more than the person still owes.
+    function checkExcess() {
+      const save = $('#ae-save', el);
+      const box = $('#ae-excess', el);
+      const l = f.type === 'loan_recovery' ? selectedLoan() : null;
+      const amount = enteredAmount();
+      const over = l && amount > 0 && cents(amount) > cents(loanAvailable(l));
+      box.innerHTML = over
+        ? `<div class="alert danger">${icon('alert')}<span>Excess recovery is not allowed. ${esc(l.borrower)} owes ${esc(money(loanAvailable(l)))} on ${esc(l.loanNo)}; you entered ${esc(money(amount))}.</span></div>`
+        : '';
+      save.disabled = !!over || (f.type === 'loan_recovery' && !l);
+    }
     const setType = (t) => {
       f.type = t;
       const loan = t === 'loan_given' || t === 'loan_recovery';
@@ -1099,6 +1137,13 @@
       resetForce();
     };
     $$('#ae-type button', el).forEach((b) => b.addEventListener('click', () => setType(b.dataset.t)));
+    $$('[data-loanmode]', el).forEach((a) =>
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        m.close();
+        openAddEntry({ type: a.dataset.loanmode });
+      }),
+    );
     if (preset.type === 'transfer' && preset.toAccount) {
       const firstOther = accountsFrom.find((a) => a !== preset.toAccount);
       if (firstOther) $('#ae-acc', el).value = firstOther;
@@ -1170,6 +1215,7 @@
     };
     $('#ae-amount', el).addEventListener('input', () => {
       checkAuthority();
+      checkExcess();
       resetForce();
     });
     ['#ae-desc', '#ae-acc', '#ae-to', '#ae-cat'].forEach((s) => $(s, el).addEventListener('input', resetForce));
@@ -1199,6 +1245,7 @@
         const pending = $('#ae-tag', el).value.trim();
         if (pending && !addTag(pending)) return;
         if (f.type === 'loan_recovery' && !$('#ae-loanid', el)) throw new Error('There is no loan to recover.');
+        if (f.type === 'loan_recovery' && cents(enteredAmount()) > cents(loanAvailable(selectedLoan()))) throw new Error('Excess recovery is not allowed.');
         $('#ae-tag', el).value = '';
         const body = {
           type: f.type,
@@ -1233,6 +1280,7 @@
         }
       } finally {
         btn.disabled = false;
+        checkExcess();
       }
     });
   }
@@ -1258,7 +1306,8 @@
       <div class="stack">
         <div class="row"><span class="muted">Money paid to a person and recovered later, in full or in parts. Loans are not expenses or funds received: they stay in the <b>${esc(S.data.loanAccount)}</b> account until recovered.</span><span class="spacer"></span>
           <button class="btn primary" id="ln-new">${icon('plus')}Give a loan</button>
-          ${active.length ? `<button class="btn" id="ln-rec">${icon('up')}Record recovery</button>` : ''}</div>
+          ${active.length ? `<button class="btn" id="ln-rec">${icon('up')}Record recovery</button>` : ''}
+          ${loans.length ? `<button class="btn" id="ln-report">${icon('print')}Loan status report</button>` : ''}</div>
         <div class="cards">
           <div class="card stat navy"><div class="label">${icon('loan')}Outstanding</div><div class="value">${money(sum('outstanding'))}</div><div class="foot">${active.length} active loan${active.length === 1 ? '' : 's'}</div></div>
           <div class="card stat"><div class="label"><span class="dot" style="background:var(--caution)"></span>Total paid out</div><div class="value">${money(sum('given'))}</div><div class="foot">Posted loan payments</div></div>
@@ -1300,6 +1349,7 @@
     $('#ln-status', el).addEventListener('change', (e) => ((f.status = e.target.value), draw()));
     $('#ln-new', el).addEventListener('click', () => openAddEntry({ type: 'loan_given' }));
     $('#ln-rec', el)?.addEventListener('click', () => openAddEntry({ type: 'loan_recovery' }));
+    $('#ln-report', el)?.addEventListener('click', openLoanReportDialog);
     if (param) openLoanDetail(param);
   }
 
@@ -1344,6 +1394,119 @@
         openAddEntry({ type: x === 'more' ? 'loan_given' : 'loan_recovery', loanId: l.id });
       }),
     );
+  }
+
+  // Posted totals of a loan up to a date (inclusive). A reversal of a payment
+  // reduces what was paid out; a reversal of a recovery reduces what was recovered.
+  function loanAsOf(l, asOf) {
+    const LA = S.data.loanAccount;
+    const r = { given: 0, recovered: 0, firstDate: null, lastRecovery: null };
+    for (const t of S.data.transactions) {
+      if (t.loanId !== l.id || t.status !== 'posted' || (asOf && t.dateISO > asOf)) continue;
+      const out = t.toAccount === LA;
+      if (!t.reversalOf && out) {
+        r.given += t.amount;
+        if (!r.firstDate || t.dateISO < r.firstDate) r.firstDate = t.dateISO;
+      } else if (!t.reversalOf) {
+        r.recovered += t.amount;
+        if (!r.lastRecovery || t.dateISO > r.lastRecovery) r.lastRecovery = t.dateISO;
+      } else if (out) r.recovered -= t.amount;
+      else r.given -= t.amount;
+    }
+    r.given = cents(r.given) / 100;
+    r.recovered = cents(r.recovered) / 100;
+    r.outstanding = cents(r.given - r.recovered) / 100;
+    return r;
+  }
+
+  function openLoanReportDialog() {
+    const names = [...new Set(S.data.loans.map((l) => l.borrower))].sort((a, b) => a.localeCompare(b));
+    const m = openModal({
+      title: 'Loan status report',
+      body: `<label class="field"><span>Borrower</span><select class="input" id="lr-who"><option value="">All persons</option>${names.map((n) => `<option>${esc(n)}</option>`).join('')}</select></label>
+        <div class="grid-2">
+          <label class="field"><span>Show</span><select class="input" id="lr-show"><option value="outstanding">Loans with an outstanding amount</option><option value="all">All loans (including fully recovered)</option></select></label>
+          <label class="field"><span>Status as on (DD/MM/YYYY)</span>${dateBox('lr-asof', isoLocal(new Date()), 'As on date')}</label>
+        </div>
+        <div class="small muted">Shows, for each person, every loan with the amount paid out, recovered and still outstanding as on the chosen date. Only posted entries are counted. Opens in a new tab ready to print or save as PDF.</div>`,
+      footer: `<button class="btn" data-close>Cancel</button><button class="btn primary" id="lr-ok">${icon('print')}Generate report</button>`,
+    });
+    maskDate($('#lr-asof', m.el));
+    $('#lr-ok', m.el).addEventListener('click', () => {
+      const asOf = readDMY($('#lr-asof', m.el));
+      if (asOf === undefined) return toast('Enter the date as DD/MM/YYYY, for example 31/10/2026.', 'error');
+      const win = window.open('', '_blank');
+      if (!win) return toast('Please allow pop-ups for this site to print the report.', 'error');
+      win.document.write(loanReportHtml($('#lr-who', m.el).value, $('#lr-show', m.el).value === 'all', asOf || isoLocal(new Date())));
+      win.document.close();
+      m.close();
+    });
+  }
+
+  function loanReportHtml(who, includeClosed, asOf) {
+    const mo = (n) => money(n);
+    const rows = S.data.loans
+      .filter((l) => !who || l.borrower === who)
+      .map((l) => ({ l, ...loanAsOf(l, asOf) }))
+      .filter((r) => r.given > 0 || r.recovered > 0)
+      .filter((r) => includeClosed || r.outstanding > 0);
+    // One block per person (a person may have more than one loan).
+    const people = new Map();
+    for (const r of rows) {
+      const k = r.l.borrower.trim().toLowerCase();
+      if (!people.has(k)) people.set(k, { name: r.l.borrower, mobile: r.l.mobile, loans: [] });
+      people.get(k).loans.push(r);
+    }
+    const blocks = [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const tot = (list, k) => list.reduce((a, r) => a + r[k], 0);
+    const body = blocks
+      .map((p) => {
+        p.loans.sort((a, b) => a.l.loanNo.localeCompare(b.l.loanNo));
+        const lines = p.loans
+          .map(
+            (r) => `<tr><td>${esc(r.l.loanNo)}</td><td>${esc(isoToDMY(r.firstDate) || '—')}</td><td>${esc(r.l.purpose || '')}</td>
+              <td class="n">${mo(r.given)}</td><td class="n">${mo(r.recovered)}</td><td class="n"><b>${mo(r.outstanding)}</b></td>
+              <td>${esc(isoToDMY(r.lastRecovery) || '—')}</td><td>${r.outstanding > 0 ? 'Outstanding' : 'Fully recovered'}</td></tr>`,
+          )
+          .join('');
+        return `<tr class="person"><td colspan="8"><b>${esc(p.name)}</b>${p.mobile ? ` · ${esc(p.mobile)}` : ''}</td></tr>${lines}
+          ${p.loans.length > 1 ? `<tr class="sub"><td colspan="3">Total for ${esc(p.name)}</td><td class="n">${mo(tot(p.loans, 'given'))}</td><td class="n">${mo(tot(p.loans, 'recovered'))}</td><td class="n">${mo(tot(p.loans, 'outstanding'))}</td><td colspan="2"></td></tr>` : ''}`;
+      })
+      .join('');
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Loan Status Report — ${esc(S.company)}</title>
+      <style>
+        body{font:12px/1.45 system-ui,-apple-system,'Segoe UI',sans-serif;color:#1b1a2b;margin:28px}
+        .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #171735;padding-bottom:12px}
+        h1{font-size:24px;margin:0;letter-spacing:.02em} h2{font-size:15px;margin:2px 0 0;color:#6558d3;font-weight:600}
+        .meta{text-align:right;color:#55536b}
+        .boxes{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:10px;margin:16px 0}
+        .box{border:1px solid #d9d8e5;border-radius:8px;padding:9px 11px}.box b{display:block;font-size:14px;margin-top:3px}
+        .box span{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#6b6985}
+        table{width:100%;border-collapse:collapse}th{background:#171735;color:#fff;text-align:left;padding:7px 8px;font-size:11px}
+        td{padding:6px 8px;border-bottom:1px solid #e6e5ef;vertical-align:top}.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+        tr.person td{background:#f1f0f8;border-top:1px solid #d9d8e5}tr.sub td{font-weight:600;color:#55536b}
+        tfoot td{font-weight:700;border-top:2px solid #171735}
+        .sig{display:grid;grid-template-columns:repeat(3,1fr);gap:40px;margin-top:60px}
+        .sig div{border-top:1px solid #1b1a2b;padding-top:6px;text-align:center;color:#55536b}
+        .foot{margin-top:24px;color:#8a88a0;font-size:10.5px;text-align:center}
+        @media print{body{margin:12mm}}
+      </style></head><body>
+      <div class="head"><div><h1>${esc(S.company)}</h1><h2>Loan Status Report</h2></div>
+        <div class="meta"><div><b>Status as on:</b> ${esc(isoToDMY(asOf))}</div><div><b>Borrower:</b> ${esc(who || 'All persons')}</div><div><b>Showing:</b> ${includeClosed ? 'All loans' : 'Loans with an outstanding amount'}</div><div>Generated ${esc(fmtDateTime(new Date().toISOString()))} by ${esc(S.me.fullName)}</div></div></div>
+      <div class="boxes">
+        <div class="box"><span>Persons</span><b>${blocks.length}</b></div>
+        <div class="box"><span>Loans</span><b>${rows.length}</b></div>
+        <div class="box"><span>Total paid out</span><b>${mo(tot(rows, 'given'))}</b></div>
+        <div class="box"><span>Total recovered</span><b>${mo(tot(rows, 'recovered'))}</b></div>
+        <div class="box"><span>Total outstanding</span><b>${mo(tot(rows, 'outstanding'))}</b></div>
+      </div>
+      <table><thead><tr><th>Loan no.</th><th>Date given</th><th>Purpose</th><th class="n">Paid out</th><th class="n">Recovered</th><th class="n">Outstanding</th><th>Last recovery</th><th>Status</th></tr></thead>
+        <tbody>${body || '<tr><td colspan="8" style="text-align:center;padding:20px;color:#8a88a0">No loans to show for this selection.</td></tr>'}</tbody>
+        <tfoot><tr><td colspan="3">Grand total · ${blocks.length} person${blocks.length === 1 ? '' : 's'}, ${rows.length} loan${rows.length === 1 ? '' : 's'}</td><td class="n">${mo(tot(rows, 'given'))}</td><td class="n">${mo(tot(rows, 'recovered'))}</td><td class="n">${mo(tot(rows, 'outstanding'))}</td><td colspan="2"></td></tr></tfoot></table>
+      <div class="sig"><div>Prepared by</div><div>Checked by</div><div>Approved by</div></div>
+      <div class="foot">${esc(S.company)} · Ledger Book · Computer-generated report of posted loan entries</div>
+      <script>window.onload=function(){setTimeout(function(){window.print()},300)}<\/script>
+      </body></html>`;
   }
 
   function loanStatementHtml(l) {

@@ -336,6 +336,9 @@ test('ALIDADA ledger: roles, limits, maker-checker workflow', async () => {
   assert.equal(r.data.reason, 'exceeds_outstanding');
   assert.match(r.data.error, /Outstanding on LN-0001 is ৳ ?3,000\.00/);
   assert.equal((await U1.post('/api/transactions', loanIn({ amount: 10, loanId: 'nope' }))).status, 400, 'unknown loan');
+  r = await U1.post('/api/transactions', loanIn({ amount: 10, borrower: 'Someone New' }));
+  assert.equal(r.status, 400, 'a recovery cannot create a new borrower');
+  assert.match(r.data.error, /Choose a valid loan/);
   // Recover the rest in full: the loan closes.
   r = await U1.post('/api/transactions', loanIn({ amount: 3000, loanId: loan.id, date: today }));
   assert.equal(r.data.outcome, 'posted', JSON.stringify(r.data));
