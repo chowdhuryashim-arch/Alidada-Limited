@@ -39,8 +39,10 @@
     audit: null,
     limitHistory: null,
     view: null,
-    txFilters: { q: '', status: 'active', type: '', account: '', category: '' },
+    txFilters: { q: '', status: 'active', type: '', account: '', category: '', tag: '' },
     period: store.get('period', 'this_month'),
+    customFrom: store.get('customFrom', null),
+    customTo: store.get('customTo', null),
     approvalsTab: null,
   };
 
@@ -165,7 +167,7 @@
     cancelled: 'Withdrawn',
   };
   const STATUS_ICON = { posted: 'check', pending_approval: 'clock', approved: 'send', rejected: 'reject', cancelled: 'x' };
-  const ROLE_LABEL = { admin: 'Admin', superuser: 'Super User', user: 'User' };
+  const ROLE_LABEL = { admin: 'Admin', superuser: 'Super User', miduser: 'Mid User', user: 'User' };
   const EVENT_LABEL = {
     initiated: 'Initiated',
     auto_posted: 'Posted automatically (within limit)',
@@ -182,6 +184,8 @@
   const statusChip = (s) => `<span class="chip ${s}">${icon(STATUS_ICON[s])}${esc(STATUS_LABEL[s] || s)}</span>`;
   const isFinancial = () => S.me && S.me.role !== 'admin';
   const isSuper = () => S.me && S.me.role === 'superuser';
+  // Mid Users and Super Users may add categories and tags.
+  const canManageLists = () => S.me && (S.me.role === 'superuser' || S.me.role === 'miduser');
   const userName = (id) => {
     if (!id) return '—';
     if (id === S.me.id) return `${S.me.fullName} (you)`;
@@ -197,6 +201,7 @@
     ['last_3', 'Last 3 months'],
     ['last_6', 'Last 6 months'],
     ['this_year', 'This year'],
+    ['custom', 'Custom range…'],
   ];
   function periodRange(p) {
     const now = new Date();
@@ -210,6 +215,7 @@
       case 'last_3': return [first(y, m - 2), last(y, m)];
       case 'last_6': return [first(y, m - 5), last(y, m)];
       case 'this_year': return [`${y}-01-01`, `${y}-12-31`];
+      case 'custom': return [S.customFrom || null, S.customTo || null];
       default: return [null, null];
     }
   }
@@ -218,22 +224,43 @@
     return (!a || dateISO >= a) && (!b || dateISO <= b);
   };
   const periodSelect = (id) =>
-    `<select class="input" id="${id}" style="width:auto">${PERIODS.map(([v, l]) => `<option value="${v}"${S.period === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+    `<select class="input" id="${id}" style="width:auto">${PERIODS.map(([v, l]) => `<option value="${v}"${S.period === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
+     <span class="row${S.period === 'custom' ? '' : ' hidden'}" id="${id}-range" style="gap:6px;flex-wrap:nowrap">
+       <input class="input" type="date" id="${id}-from" value="${esc(S.customFrom || '')}" style="width:auto" aria-label="From date">
+       <span class="muted">to</span>
+       <input class="input" type="date" id="${id}-to" value="${esc(S.customTo || '')}" style="width:auto" aria-label="To date">
+     </span>`;
+  // Wire a period select (and its custom From/To pickers) to a redraw.
+  function bindPeriod(el, id, onChange) {
+    $(`#${id}`, el).addEventListener('change', (e) => {
+      S.period = e.target.value;
+      store.set('period', S.period);
+      $(`#${id}-range`, el).classList.toggle('hidden', S.period !== 'custom');
+      onChange();
+    });
+    for (const [part, key] of [['from', 'customFrom'], ['to', 'customTo']]) {
+      $(`#${id}-${part}`, el).addEventListener('change', (e) => {
+        S[key] = e.target.value || null;
+        store.set(key, S[key]);
+        onChange();
+      });
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Views & navigation
   // ---------------------------------------------------------------------------
   const VIEWS = {
-    dashboard: { title: 'Dashboard', icon: 'dashboard', roles: ['user', 'superuser'], render: renderDashboard },
-    transactions: { title: 'Transactions', icon: 'list', roles: ['user', 'superuser'], render: renderTransactions },
-    approvals: { title: 'Approvals', icon: 'approve', roles: ['user', 'superuser'], render: renderApprovals, badge: () => S.counts.toApprove + S.counts.toPost },
-    budgets: { title: 'Budgets', icon: 'target', roles: ['user', 'superuser'], render: renderBudgets },
-    documents: { title: 'Documents', icon: 'file', roles: ['user', 'superuser'], render: renderDocuments },
+    dashboard: { title: 'Dashboard', icon: 'dashboard', roles: ['user', 'miduser', 'superuser'], render: renderDashboard },
+    transactions: { title: 'Transactions', icon: 'list', roles: ['user', 'miduser', 'superuser'], render: renderTransactions },
+    approvals: { title: 'Approvals', icon: 'approve', roles: ['user', 'miduser', 'superuser'], render: renderApprovals, badge: () => S.counts.toApprove + S.counts.toPost },
+    budgets: { title: 'Budgets', icon: 'target', roles: ['user', 'miduser', 'superuser'], render: renderBudgets },
+    documents: { title: 'Documents', icon: 'file', roles: ['user', 'miduser', 'superuser'], render: renderDocuments },
     users: { title: 'Users', icon: 'users', roles: ['admin'], render: renderUsers },
     limits: { title: 'Financial Limits', icon: 'shield', roles: ['superuser'], render: renderLimits },
-    messages: { title: 'Messages', icon: 'bell', roles: ['admin', 'user', 'superuser'], render: renderMessages, badge: () => S.counts.unread },
+    messages: { title: 'Messages', icon: 'bell', roles: ['admin', 'user', 'miduser', 'superuser'], render: renderMessages, badge: () => S.counts.unread },
     audit: { title: 'Audit Trail', icon: 'history', roles: ['admin', 'superuser'], render: renderAudit },
-    settings: { title: 'Settings', icon: 'settings', roles: ['admin', 'user', 'superuser'], render: renderSettings },
+    settings: { title: 'Settings', icon: 'settings', roles: ['admin', 'user', 'miduser', 'superuser'], render: renderSettings },
   };
   const allowedViews = () => Object.keys(VIEWS).filter((k) => VIEWS[k].roles.includes(S.me.role));
   const defaultView = () => (S.me.role === 'admin' ? 'users' : 'dashboard');
@@ -522,11 +549,7 @@
           </div>
         </div>
       </div>`;
-    $('#dash-period', el).addEventListener('change', (e) => {
-      S.period = e.target.value;
-      store.set('period', S.period);
-      rerender();
-    });
+    bindPeriod(el, 'dash-period', rerender);
     $('#push-nudge-x', el)?.addEventListener('click', () => {
       store.set('pushNudgeHidden', true);
       $('#push-nudge', el).remove();
@@ -701,6 +724,7 @@
           <select class="input" id="f-type">${[['', 'All types'], ['expense', 'Expense'], ['receive', 'Receive Fund'], ['transfer', 'Transfer']].map(([v, l]) => `<option value="${v}"${f.type === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
           <select class="input" id="f-account">${opts(d.settings.accounts, f.account, 'All accounts')}</select>
           <select class="input" id="f-category">${opts(d.settings.categories, f.category, 'All categories')}</select>
+          <select class="input" id="f-tag">${opts(d.tags, f.tag, 'All tags')}</select>
           ${periodSelect('f-period')}
           <button class="btn" id="f-csv" title="Download the filtered list as CSV">${icon('csv')}CSV</button>
         </div>
@@ -714,6 +738,7 @@
           (!f.type || t.type === f.type) &&
           (!f.account || t.account === f.account || t.toAccount === f.account) &&
           (!f.category || (t.category === f.category && t.type !== 'transfer')) &&
+          (!f.tag || t.tags.includes(f.tag)) &&
           inPeriod(t.dateISO, S.period) &&
           (!q || `${t.description} ${t.voucherNo} ${t.tags.join(' ')} ${t.note || ''} ${t.category}`.toLowerCase().includes(q)),
       );
@@ -736,7 +761,8 @@
     on('#f-type', 'type');
     on('#f-account', 'account');
     on('#f-category', 'category');
-    on('#f-period', 'period');
+    on('#f-tag', 'tag');
+    bindPeriod(el, 'f-period', () => (current = draw()));
     $('#f-csv', el).addEventListener('click', () => downloadCsv(current));
   }
 
@@ -955,7 +981,7 @@
         </div>
         <label class="field"><span>Tags</span>
           <div class="row" id="ae-tag-chips"></div>
-          <input class="input" id="ae-tag" list="ae-tag-list" placeholder="Type a tag and press Enter">
+          <input class="input" id="ae-tag" list="ae-tag-list" placeholder="${canManageLists() ? 'Type a tag and press Enter' : 'Choose an existing tag'}">
           <datalist id="ae-tag-list">${S.data.tags.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>
         </label>
         <label class="field"><span>Note</span><textarea class="input" id="ae-note" maxlength="500" placeholder="Optional reference, cheque no., invoice no.…"></textarea></label>
@@ -995,11 +1021,26 @@
       $('#ae-tag-chips', el).innerHTML = f.tags.map((t, i) => `<span class="tag">${esc(t)}<button type="button" data-i="${i}" aria-label="Remove">×</button></span>`).join('');
       $$('#ae-tag-chips button', el).forEach((b) => b.addEventListener('click', () => (f.tags.splice(+b.dataset.i, 1), drawTags())));
     };
+    const addTag = (v) => {
+      if (!v || f.tags.includes(v)) return true;
+      if (!canManageLists() && !S.data.tags.includes(v)) {
+        toast(`Tag “${v}” does not exist. Choose an existing tag — only Mid Users and Super Users can create new tags.`, 'error');
+        return false;
+      }
+      f.tags.push(v);
+      return true;
+    };
     $('#ae-tag', el).addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ',') {
         e.preventDefault();
-        const v = e.target.value.trim();
-        if (v && !f.tags.includes(v)) f.tags.push(v);
+        if (addTag(e.target.value.trim())) e.target.value = '';
+        drawTags();
+      }
+    });
+    // Picking a suggestion from the list adds it straight away.
+    $('#ae-tag', el).addEventListener('change', (e) => {
+      const v = e.target.value.trim();
+      if (S.data.tags.includes(v) && addTag(v)) {
         e.target.value = '';
         drawTags();
       }
@@ -1063,7 +1104,8 @@
           f.documentId = up.document.id;
         }
         const pending = $('#ae-tag', el).value.trim();
-        if (pending && !f.tags.includes(pending)) f.tags.push(pending);
+        if (pending && !addTag(pending)) return;
+        $('#ae-tag', el).value = '';
         const body = {
           type: f.type,
           amount: $('#ae-amount', el).value,
@@ -1541,7 +1583,7 @@
       title: isNew ? 'Create user' : `Edit ${u.fullName}`,
       body: `
         <label class="field"><span>Role *</span>
-          <div class="segmented full" id="ue-role"><button data-r="user">User</button><button data-r="superuser">Super User</button></div></label>
+          <div class="segmented full" id="ue-role"><button data-r="user">User</button><button data-r="miduser">Mid User</button><button data-r="superuser">Super User</button></div></label>
         <div class="small muted" id="ue-role-help"></div>
         <div class="grid-2">
           <label class="field"><span>Full name *</span><input class="input" id="ue-name" maxlength="80" value="${esc(u?.fullName || '')}"></label>
@@ -1561,7 +1603,8 @@
     });
     let role = u?.role || 'user';
     const help = {
-      user: 'User — initiates transactions; posts directly within the delegated limit, and can approve others’ transactions up to that limit.',
+      user: 'User — initiates transactions; posts directly within the delegated limit, and can approve others’ transactions up to that limit. Uses existing categories and tags only.',
+      miduser: 'Mid User — everything a User can do, plus adds new categories and tags. Cannot assign financial limits; their own limit is set by a Super User.',
       superuser: 'Super User — everything a User can do, plus assigns financial limits to other users, manages budgets and ledger settings.',
     };
     const setRole = (r) => {
@@ -1732,7 +1775,7 @@
         <div class="grid-2">
           <div class="card"><div class="card-h"><h3>Tags</h3></div><div class="card-b">
             <div>${S.data.tags.length ? S.data.tags.map((t) => `<span class="tag">${esc(t)} <span class="muted">${S.data.transactions.filter((x) => x.tags.includes(t)).length}</span>${isSuper() ? `<button data-tag-del="${esc(t)}" aria-label="Delete tag">×</button>` : ''}</span>`).join('') : '<span class="muted">No tags yet.</span>'}</div>
-            <div class="row" style="margin-top:12px;flex-wrap:nowrap"><input class="input" id="tag-new" maxlength="40" placeholder="New tag name"><button class="btn" id="tag-add">${icon('plus')}Add</button></div>
+            ${canManageLists() ? `<div class="row" style="margin-top:12px;flex-wrap:nowrap"><input class="input" id="tag-new" maxlength="40" placeholder="New tag name"><button class="btn" id="tag-add">${icon('plus')}Add</button></div>` : '<div class="small muted" style="margin-top:10px">New tags are added by Mid Users and Super Users.</div>'}
           </div></div>
           <div class="card"><div class="card-h"><h3>Currency</h3></div><div class="card-b">
             <div class="row" style="flex-wrap:nowrap"><input class="input" id="cur" maxlength="5" value="${esc(st.currency)}" ${isSuper() ? '' : 'disabled'} style="max-width:120px"> ${isSuper() ? `<button class="btn" id="cur-save">Save</button>` : '<span class="small muted">Set by Super Users</span>'}</div>
@@ -1768,7 +1811,7 @@
     if (!isFinancial()) return;
     bindListEditor(el, 'categories');
     bindListEditor(el, 'accounts');
-    $('#tag-add', el).addEventListener('click', async () => {
+    $('#tag-add', el)?.addEventListener('click', async () => {
       const name = $('#tag-new', el).value.trim();
       if (!name) return;
       try {
@@ -1830,13 +1873,28 @@
 
   function listEditor(key, items) {
     const canEdit = isSuper();
+    // Categories: Mid Users may add (not remove); accounts stay with Super Users.
+    const canAdd = canEdit || (key === 'categories' && canManageLists());
     const locked = (v) => (key === 'accounts' && v === PETTY_CASH) || (key === 'categories' && v === 'Needs review');
     return `<div>${items
       .map((v) => `<span class="tag">${esc(v)}${locked(v) ? ' <span class="muted small">System</span>' : canEdit ? `<button data-rm-${key}="${esc(v)}" aria-label="Remove">×</button>` : ''}</span>`)
       .join('')}</div>
-      ${canEdit ? `<div class="row" style="margin-top:12px;flex-wrap:nowrap"><input class="input" id="add-${key}" maxlength="80" placeholder="Add ${key === 'accounts' ? 'an account' : 'a category'}"><button class="btn" id="btn-${key}">${icon('plus')}Add</button></div>` : '<div class="small muted" style="margin-top:10px">Managed by Super Users.</div>'}`;
+      ${canAdd ? `<div class="row" style="margin-top:12px;flex-wrap:nowrap"><input class="input" id="add-${key}" maxlength="80" placeholder="Add ${key === 'accounts' ? 'an account' : 'a category'}"><button class="btn" id="btn-${key}">${icon('plus')}Add</button></div>` : `<div class="small muted" style="margin-top:10px">${key === 'categories' ? 'New categories are added by Mid Users and Super Users.' : 'Managed by Super Users.'}</div>`}`;
   }
   function bindListEditor(el, key) {
+    if (key === 'categories' && canManageLists()) {
+      $(`#btn-${key}`, el).addEventListener('click', async () => {
+        const name = $(`#add-${key}`, el).value.trim();
+        if (!name) return;
+        try {
+          await api('/api/categories', { method: 'POST', body: { name } });
+          toast(`Category “${name}” added.`);
+          await refreshAll();
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      });
+    }
     if (!isSuper()) return;
     const save = async (list) => {
       try {
@@ -1846,10 +1904,11 @@
         toast(err.message, 'error');
       }
     };
-    $(`#btn-${key}`, el).addEventListener('click', () => {
-      const v = $(`#add-${key}`, el).value.trim();
-      if (v) save([...S.data.settings[key], v]);
-    });
+    if (key !== 'categories')
+      $(`#btn-${key}`, el).addEventListener('click', () => {
+        const v = $(`#add-${key}`, el).value.trim();
+        if (v) save([...S.data.settings[key], v]);
+      });
     $$(`[data-rm-${key}]`, el).forEach((b) =>
       b.addEventListener('click', async () => {
         const v = b.getAttribute(`data-rm-${key}`);
@@ -1891,38 +1950,49 @@
   function openStatementDialog() {
     const accounts = S.data.settings.accounts;
     const [a, b] = periodRange(S.period);
-    const toDMY = (iso) => (iso ? iso.split('-').reverse().join('/') : '');
     const m = openModal({
       title: 'Print ledger statement',
-      body: `<label class="field"><span>Account</span><select class="input" id="st-acc"><option value="">All accounts</option>${accounts.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
-        <div class="grid-2">
-          <label class="field"><span>From (DD/MM/YYYY)</span><input class="input" id="st-from" value="${toDMY(a)}" placeholder="Beginning"></label>
-          <label class="field"><span>To (DD/MM/YYYY)</span><input class="input" id="st-to" value="${toDMY(b)}" placeholder="Today"></label>
+      body: `<div class="grid-2">
+          <label class="field"><span>Account</span><select class="input" id="st-acc"><option value="">All accounts</option>${accounts.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
+          <label class="field"><span>Tag</span><select class="input" id="st-tag"><option value="">All tags</option>${S.data.tags.map((x) => `<option>${esc(x)}</option>`).join('')}</select></label>
         </div>
-        <div class="small muted">Only posted transactions appear on the statement. It opens in a new tab ready to print or save as PDF.</div>`,
+        <label class="field"><span>Date range</span><select class="input" id="st-preset">${PERIODS.map(([v, l]) => `<option value="${v}"${v === S.period ? ' selected' : ''}>${v === 'all' ? 'All dates' : l}</option>`).join('')}</select></label>
+        <div class="grid-2">
+          <label class="field"><span>From</span><input class="input" type="date" id="st-from" value="${a || ''}"></label>
+          <label class="field"><span>To</span><input class="input" type="date" id="st-to" value="${b || ''}"></label>
+        </div>
+        <div class="small muted">Leave From empty to start at the first entry, or To empty to run up to today. Only posted transactions appear. The statement opens in a new tab ready to print or save as PDF.</div>`,
       footer: `<button class="btn" data-close>Cancel</button><button class="btn primary" id="st-ok">${icon('print')}Generate statement</button>`,
     });
+    // A preset fills the From/To pickers; editing a date switches to "Custom range".
+    $('#st-preset', m.el).addEventListener('change', (e) => {
+      if (e.target.value === 'custom') return;
+      const [pa, pb] = periodRange(e.target.value);
+      $('#st-from', m.el).value = pa || '';
+      $('#st-to', m.el).value = pb || '';
+    });
+    ['#st-from', '#st-to'].forEach((sel) => $(sel, m.el).addEventListener('change', () => ($('#st-preset', m.el).value = 'custom')));
     $('#st-ok', m.el).addEventListener('click', () => {
-      const parse = (s) => {
-        const x = s.trim().match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
-        return x ? `${x[3]}-${x[2].padStart(2, '0')}-${x[1].padStart(2, '0')}` : s.trim() ? 'bad' : null;
-      };
-      const from = parse($('#st-from', m.el).value);
-      const to = parse($('#st-to', m.el).value);
-      if (from === 'bad' || to === 'bad') return toast('Enter dates as DD/MM/YYYY.', 'error');
+      const from = $('#st-from', m.el).value || null;
+      const to = $('#st-to', m.el).value || null;
+      if (from && to && from > to) return toast('The From date is after the To date.', 'error');
       const win = window.open('', '_blank');
       if (!win) return toast('Please allow pop-ups for this site to print the statement.', 'error');
-      win.document.write(statementHtml($('#st-acc', m.el).value, from, to));
+      win.document.write(statementHtml($('#st-acc', m.el).value, from, to, $('#st-tag', m.el).value));
       win.document.close();
       m.close();
     });
   }
 
-  function statementHtml(account, from, to) {
+  function statementHtml(account, from, to, tag = '') {
     const dmy = (iso) => iso.split('-').reverse().join('-');
+    // Running/opening/closing balances only make sense for a whole account,
+    // not for a tag's subset of it.
+    const balances = !!account && !tag;
     const rows = [];
     for (const t of postedTx()) {
       if ((from && t.dateISO < from) || (to && t.dateISO > to)) continue;
+      if (tag && !t.tags.includes(tag)) continue;
       if (t.type === 'transfer') {
         if (!account || t.account === account) rows.push({ t, debit: t.amount, credit: 0, acct: t.account, desc: `${t.description} (to ${t.toAccount})` });
         if (!account || t.toAccount === account) rows.push({ t, debit: 0, credit: t.amount, acct: t.toAccount, desc: `${t.description} (from ${t.account})` });
@@ -1933,7 +2003,7 @@
     rows.sort((x, y) => (x.t.dateISO < y.t.dateISO ? -1 : x.t.dateISO > y.t.dateISO ? 1 : x.t.voucherNo < y.t.voucherNo ? -1 : 1));
     // Opening balance for a single-account statement
     let opening = 0;
-    if (account && from) for (const t of postedTx()) if (t.dateISO < from) opening += signedAmount(t, account);
+    if (balances && from) for (const t of postedTx()) if (t.dateISO < from) opening += signedAmount(t, account);
     const credit = rows.reduce((s, r) => s + r.credit, 0);
     const debit = rows.reduce((s, r) => s + r.debit, 0);
     let run = opening;
@@ -1948,7 +2018,7 @@
       .map((r) => {
         run += r.credit - r.debit;
         return `<tr><td>${esc(r.t.date)}</td><td>${esc(r.t.voucherNo)}</td><td>${esc(r.desc)}${!account ? `<div class="s">${esc(r.acct)}</div>` : ''}</td><td>${esc(r.t.type === 'transfer' ? 'Transfer' : r.t.category)}</td>
-          <td class="n">${r.debit ? m(r.debit) : ''}</td><td class="n">${r.credit ? m(r.credit) : ''}</td>${account ? `<td class="n">${m(run)}</td>` : ''}</tr>`;
+          <td class="n">${r.debit ? m(r.debit) : ''}</td><td class="n">${r.credit ? m(r.credit) : ''}</td>${balances ? `<td class="n">${m(run)}</td>` : ''}</tr>`;
       })
       .join('');
     return `<!doctype html><html><head><meta charset="utf-8"><title>Ledger Statement — ${esc(S.company)}</title>
@@ -1970,18 +2040,18 @@
         @media print{body{margin:12mm}.noprint{display:none}}
       </style></head><body>
       <div class="head"><div><h1>${esc(S.company)}</h1><h2>Ledger Statement</h2></div>
-        <div class="meta"><div><b>Account:</b> ${esc(account || 'All accounts')}</div><div><b>Period:</b> ${esc(period)}</div><div>Generated ${esc(fmtDateTime(new Date().toISOString()))} by ${esc(S.me.fullName)}</div></div></div>
+        <div class="meta"><div><b>Account:</b> ${esc(account || 'All accounts')}</div>${tag ? `<div><b>Tag:</b> ${esc(tag)}</div>` : ''}<div><b>Period:</b> ${esc(period)}</div><div>Generated ${esc(fmtDateTime(new Date().toISOString()))} by ${esc(S.me.fullName)}</div></div></div>
       <div class="boxes">
-        ${account ? `<div class="box"><span>Opening balance</span><b>${m(opening)}</b></div>` : ''}
+        ${balances ? `<div class="box"><span>Opening balance</span><b>${m(opening)}</b></div>` : ''}
         <div class="box"><span>Total credit</span><b>${m(credit)}</b></div>
         <div class="box"><span>Total debit</span><b>${m(debit)}</b></div>
         <div class="box"><span>Net</span><b>${m(credit - debit)}</b></div>
         <div class="box"><span>Petty Cash balance</span><b>${m(S.data.pettyCash)}</b></div>
-        ${account ? `<div class="box"><span>Closing balance</span><b>${m(run)}</b></div>` : ''}
+        ${balances ? `<div class="box"><span>Closing balance</span><b>${m(run)}</b></div>` : ''}
       </div>
-      <table><thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Category</th><th class="n">Debit</th><th class="n">Credit</th>${account ? '<th class="n">Balance</th>' : ''}</tr></thead>
-        <tbody>${body || `<tr><td colspan="${account ? 7 : 6}" style="text-align:center;padding:20px;color:#8a88a0">No posted transactions in this period.</td></tr>`}</tbody>
-        <tfoot><tr><td colspan="4">Totals · ${rows.length} entries</td><td class="n">${m(debit)}</td><td class="n">${m(credit)}</td>${account ? `<td class="n">${m(run)}</td>` : ''}</tr></tfoot></table>
+      <table><thead><tr><th>Date</th><th>Voucher</th><th>Description</th><th>Category</th><th class="n">Debit</th><th class="n">Credit</th>${balances ? '<th class="n">Balance</th>' : ''}</tr></thead>
+        <tbody>${body || `<tr><td colspan="${balances ? 7 : 6}" style="text-align:center;padding:20px;color:#8a88a0">No posted transactions in this period.</td></tr>`}</tbody>
+        <tfoot><tr><td colspan="4">Totals · ${rows.length} entries</td><td class="n">${m(debit)}</td><td class="n">${m(credit)}</td>${balances ? `<td class="n">${m(run)}</td>` : ''}</tr></tfoot></table>
       <div class="cats"><b>Summary by category:</b>&nbsp; ${[...cats.entries()].map(([c, v]) => `${esc(c)} : ${m(v)}`).join('&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;') || '—'}</div>
       <div class="sig"><div>Prepared by</div><div>Checked by</div><div>Approved by</div></div>
       <div class="foot">${esc(S.company)} · Ledger Book · Computer-generated statement of posted transactions</div>

@@ -96,6 +96,41 @@ test('ALIDADA ledger: roles, limits, maker-checker workflow', async () => {
     r = await c.put(`/api/users/${id}/limit`, { limit, note: 'test' });
     assert.equal(r.status, 200, JSON.stringify(r.data));
   }
+  // ---- Mid User: adds categories and tags, transacts, but cannot assign limits ----------------
+  const mid = await mk('mid1', 'Mid One', 'miduser');
+  assert.equal(mid.role, 'miduser');
+  const M1 = await signIn('mid1', 'Temp12345', 'Mid1pass1');
+  assert.equal((await M1.get('/api/me')).data.user.role, 'miduser');
+  assert.equal((await M1.put(`/api/users/${u2.id}/limit`, { limit: 5 })).status, 403, 'Mid User cannot assign limits');
+  assert.equal((await M1.get('/api/limit-history')).status, 403);
+  r = await S1.put(`/api/users/${mid.id}/limit`, { limit: 20000 });
+  assert.equal(r.data.user.financialLimit, 20000, 'Super User sets a Mid User limit');
+  r = await M1.post('/api/categories', { name: 'Fuel' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.ok(r.data.settings.categories.includes('Fuel'));
+  assert.equal((await M1.post('/api/categories', { name: 'fuel' })).status, 409, 'no duplicate categories');
+  assert.equal((await M1.put('/api/settings', { key: 'categories', value: ['Needs review'] })).status, 403, 'Mid User cannot remove categories');
+  assert.equal((await M1.post('/api/tags', { name: 'Project-A' })).status, 200);
+  assert.equal((await U1.post('/api/categories', { name: 'Gifts' })).status, 403, 'User cannot add categories');
+  assert.equal((await U1.post('/api/tags', { name: 'Mine' })).status, 403, 'User cannot add tags');
+  // A User may use an existing tag, but not invent one.
+  r = await U1.post('/api/transactions', entry({ amount: 100, description: 'Diesel for generator', category: 'Fuel', tags: ['Project-A'] }));
+  assert.equal(r.data.outcome, 'posted', JSON.stringify(r.data));
+  r = await U1.post('/api/transactions', entry({ amount: 101, description: 'Courier', tags: ['Brand-new-tag'] }));
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /does not exist/);
+  // A Mid User may create a tag while entering a transaction.
+  r = await M1.post('/api/transactions', entry({ amount: 900, description: 'Site visit taxi', tags: ['Site visit'] }));
+  assert.equal(r.data.outcome, 'posted', JSON.stringify(r.data));
+  assert.ok((await U1.get('/api/state')).data.tags.includes('Site visit'));
+  // Mid Users appear as approvers with their own role.
+  const appr = (await U1.get('/api/approvers?amount=15000')).data.approvers;
+  assert.equal(appr.find((a) => a.id === mid.id)?.role, 'miduser');
+  assert.equal((await admin.get('/api/users')).data.users.find((u) => u.id === mid.id).role, 'miduser');
+  // Role changes both ways.
+  assert.equal((await admin.patch(`/api/users/${mid.id}`, { role: 'user' })).data.user.role, 'user');
+  assert.equal((await admin.patch(`/api/users/${mid.id}`, { role: 'miduser' })).data.user.role, 'miduser');
+
   const u1msgs = (await U1.get('/api/notifications')).data.notifications;
   assert.ok(u1msgs.some((n) => n.kind === 'limit_changed'), 'user is told about their new limit');
 
@@ -173,10 +208,10 @@ test('ALIDADA ledger: roles, limits, maker-checker workflow', async () => {
   assert.equal(r.data.outcome, 'posted');
   let st = (await U1.get('/api/state')).data;
   assert.equal(st.pettyCash, 900);
-  assert.equal(st.balances['Main Bank Account'], 8000 - 30000 + 8000 - 1000);
+  assert.equal(st.balances['Main Bank Account'], 8000 - 30000 + 8000 - 1000 - 100 - 900); // incl. the Mid User section's two entries
 
   // ---- Disabling an approver: sessions end, initiator asked to re-route ---------------------------
-  r = await U1.post('/api/transactions', entry({ amount: 20000, description: 'Printer' }));
+  r = await U1.post('/api/transactions', entry({ amount: 20000, description: 'Printer', approverId: u2.id }));
   const printer = r.data.transaction;
   assert.equal(printer.approverId, u2.id);
   r = await admin.patch(`/api/users/${u2.id}`, { active: false });

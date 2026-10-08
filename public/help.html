@@ -44,7 +44,8 @@
         <tbody>
           <tr><td><b>Admin</b></td><td>Create Users and Super Users; edit names, designations and roles; enable/disable accounts; reset passwords; view the audit trail.</td><td>Hold or exercise any financial authority: no entries, no approvals, no financial limits.</td></tr>
           <tr><td><b>Super User</b></td><td>Everything a User can do, plus: assign financial limits to Users and other Super Users; manage budgets, categories, accounts and currency; backup/restore; see every unposted transaction; view the audit trail.</td><td>Assign their own financial limit (another Super User must).</td></tr>
-          <tr><td><b>User</b></td><td>Initiate Expense, Receive Fund and Transfer entries; approve other people’s entries up to their own limit; complete final posting of their approved entries.</td><td>Approve their own entries; change financial limits.</td></tr>
+          <tr><td><b>Mid User</b></td><td>Everything a User can do, plus: add new categories and tags (in Settings, or a new tag while entering a transaction).</td><td>Assign financial limits; remove categories or tags; change accounts, budgets or currency. Their own limit is set by a Super User.</td></tr>
+          <tr><td><b>User</b></td><td>Initiate Expense, Receive Fund and Transfer entries; approve other people’s entries up to their own limit; complete final posting of their approved entries.</td><td>Approve their own entries; change financial limits; create categories or tags (they choose from the existing ones).</td></tr>
         </tbody>
       </table>
 
@@ -100,7 +101,7 @@
       <p>If a new entry has the same date, description, amount, account and type as an existing one, the form shows the match and changes the button to <b>Add anyway</b>. Nothing is blocked — you decide.</p>
 
       <h2>8. Printing a ledger statement</h2>
-      <p>Click <b>Print</b> in the top bar, choose an account (or all) and a date range. The statement opens in a new tab with the company name, total credit, total debit, net and Petty Cash balance boxes (plus opening and closing balances for a single account), a Debit/Credit detail table, a category summary, and signature lines. Allow pop-ups for this site if nothing opens.</p>
+      <p>Click <b>Print</b> in the top bar, choose an account (or all), optionally a <b>tag</b> to report only entries with that tag, and a <b>date range</b> (pick a preset such as “This month”, or set any From and To dates). The Transactions page has the same Tag filter and a “Custom range…” period, and its CSV download follows the filters. The statement opens in a new tab with the company name, total credit, total debit, net and Petty Cash balance boxes (plus opening and closing balances for a single account), a Debit/Credit detail table, a category summary, and signature lines. Allow pop-ups for this site if nothing opens.</p>
 
       <h2>9. For the Admin</h2>
       <ol>

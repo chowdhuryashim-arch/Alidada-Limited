@@ -6,6 +6,7 @@ import {
   auditStmt,
   notifyStmt,
   resolveNotificationsStmt,
+  effectiveRole,
 } from './db.js';
 import { fail, uuid, nowISO, cleanText, cents, round2, parseAmount, parseDate, formatMoney } from './util.js';
 
@@ -83,13 +84,13 @@ async function nextVoucherNo(db) {
 export async function eligibleApprovers(db, amount, initiatorId) {
   const { results } = await db
     .prepare(
-      `SELECT id, username, fullName, designation, role, financialLimit FROM users
+      `SELECT id, username, fullName, designation, role, tier, financialLimit FROM users
         WHERE active = 1 AND role IN ('user', 'superuser') AND id != ? AND ROUND(financialLimit * 100) >= ?
         ORDER BY financialLimit ASC, fullName ASC`,
     )
     .bind(initiatorId, cents(amount))
     .all();
-  return results.map((u) => ({ ...u, financialLimit: Number(u.financialLimit) }));
+  return results.map(({ tier, ...u }) => ({ ...u, role: effectiveRole({ ...u, tier }), financialLimit: Number(u.financialLimit) }));
 }
 
 function eventStmt(db, transactionId, action, actorId, remark = null) {
@@ -105,6 +106,19 @@ function describe(tx, symbol) {
 }
 
 // ---- Validation -----------------------------------------------------------
+
+// Users may only use tags that already exist; Mid Users and Super Users may
+// create new ones while entering a transaction. "Reversal" is added by the system.
+const SYSTEM_TAGS = new Set(['Reversal']);
+async function checkTagsAllowed(db, user, tags, alreadyOn = []) {
+  if (!user || user.role === 'superuser' || user.role === 'miduser') return;
+  const fresh = tags.filter((t) => !SYSTEM_TAGS.has(t) && !alreadyOn.includes(t));
+  if (!fresh.length) return;
+  const { results } = await db.prepare(`SELECT name FROM tags WHERE name IN (${fresh.map(() => '?').join(',')})`).bind(...fresh).all();
+  const known = new Set(results.map((r) => r.name));
+  const unknown = fresh.filter((t) => !known.has(t));
+  if (unknown.length) fail(400, `Tag “${unknown[0]}” does not exist. Only Mid Users and Super Users can create new tags.`);
+}
 
 async function validateInput(db, input, settings) {
   const type = input.type;
@@ -148,6 +162,7 @@ export async function createTransaction(env, user, input, { reversalOf = null, s
   const db = env.DB;
   const settings = await getSettings(db);
   const tx = await validateInput(db, input, settings);
+  await checkTagsAllowed(db, user, tx.tags);
   tx.fingerprint = fingerprintOf(tx);
 
   if (!input.force && !reversalOf) {
@@ -498,6 +513,13 @@ export async function patchTransaction(env, user, id, input) {
   let newTags = [];
   if (input.tags !== undefined) {
     newTags = Array.isArray(input.tags) ? [...new Set(input.tags.map((t) => cleanText(t, 40)).filter(Boolean))].slice(0, 20) : [];
+    let current = [];
+    try {
+      current = JSON.parse(tx.tags || '[]');
+    } catch {
+      /* ignore */
+    }
+    await checkTagsAllowed(db, user, newTags, current);
     sets.push('tags = ?');
     binds.push(JSON.stringify(newTags));
     changes.push(`tags [${newTags.join(', ')}]`);

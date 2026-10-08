@@ -57,6 +57,7 @@ export async function ensureSchema(db) {
 
 const ADDED_COLUMNS = [
   ['users', 'mobile', 'TEXT'],
+  ['users', 'tier', 'TEXT'],
   ['notifications', 'pushStatus', 'TEXT'],
   ['notifications', 'pushDetail', 'TEXT'],
 ];
@@ -109,6 +110,13 @@ export function resolveNotificationsStmt(db, userId, transactionId) {
     .bind(userId, transactionId);
 }
 
+// A Mid User is stored as role 'user' with tier 'mid' (the role column's
+// CHECK constraint predates the Mid User and SQLite cannot alter it in place).
+export const effectiveRole = (u) => (u.role === 'user' && u.tier === 'mid' ? 'miduser' : u.role);
+export const storedRole = (role) => (role === 'miduser' ? { role: 'user', tier: 'mid' } : { role, tier: null });
+// Mid Users and Super Users may add categories and tags; Users only pick existing ones.
+export const canManageLists = (u) => u.role === 'superuser' || u.role === 'miduser';
+
 export function publicUser(u) {
   if (!u) return null;
   return {
@@ -117,7 +125,7 @@ export function publicUser(u) {
     fullName: u.fullName,
     designation: u.designation || '',
     mobile: u.mobile || '',
-    role: u.role,
+    role: effectiveRole(u),
     financialLimit: u.role === 'admin' ? 0 : Number(u.financialLimit) || 0,
     limitSetBy: u.limitSetBy || null,
     limitSetAt: u.limitSetAt || null,

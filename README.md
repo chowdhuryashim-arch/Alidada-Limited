@@ -10,7 +10,8 @@ The company name is shown on every page: login, setup, app shell (sidebar and th
 |---|---|---|
 | **Admin** | **None** | Creates Users and Super Users, edits roles and designations, enables and disables accounts, resets passwords, views the audit trail. Cannot enter, approve or post transactions, and cannot assign limits. |
 | **Super User** | Their delegated limit | Everything a User does. Also the **only role that can assign financial limits** (to Users and other Super Users, never to themselves). Also manages budgets, categories, accounts and currency, and runs backup/restore. |
-| **User** | Their delegated limit | Initiates transactions, approves other people's transactions up to their own limit, and does final posting of their approved transactions. |
+| **Mid User** | Their delegated limit | Everything a User does, plus adds new **categories and tags**. Cannot assign limits or remove categories/tags. Stored as role `user` with `tier = 'mid'`. |
+| **User** | Their delegated limit | Initiates transactions, approves other people's transactions up to their own limit, and does final posting of their approved transactions. Uses existing categories and tags only. |
 
 A new account starts with a limit of 0, so everything it initiates goes for approval until a Super User delegates a limit.
 

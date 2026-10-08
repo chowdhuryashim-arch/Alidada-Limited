@@ -20,6 +20,8 @@ import {
   publicUser,
   PETTY_CASH_ACCOUNT,
   SETTING_KEYS,
+  effectiveRole,
+  canManageLists,
 } from './db.js';
 import {
   createTransaction,
@@ -138,6 +140,7 @@ async function currentUser(request, env) {
   if (!session) return null;
   const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(session.uid).first();
   if (!user || !user.active || user.sessionVersion !== session.sv) return null;
+  user.role = effectiveRole(user);
   user.financialLimit = user.role === 'admin' ? 0 : Number(user.financialLimit) || 0;
   return user;
 }
@@ -248,7 +251,7 @@ async function changePassword(request, env, user) {
 
 // ---- Authenticated API ----------------------------------------------------------
 
-const isFinancial = (u) => u.role === 'user' || u.role === 'superuser';
+const isFinancial = (u) => u.role === 'user' || u.role === 'miduser' || u.role === 'superuser';
 function requireFinancial(user) {
   if (!isFinancial(user)) fail(403, 'The Admin account has no financial authority.');
 }
@@ -370,7 +373,7 @@ async function api(request, env, user, path, method, url) {
       db.prepare('SELECT name FROM tags ORDER BY name').all(),
       db.prepare('SELECT id, filename, mimeType, size, uploadedBy, createdAt FROM documents ORDER BY createdAt DESC').all(),
       db
-        .prepare("SELECT id, username, fullName, designation, role, financialLimit, active FROM users WHERE role != 'admin' ORDER BY fullName")
+        .prepare("SELECT id, username, fullName, designation, role, tier, financialLimit, active FROM users WHERE role != 'admin' ORDER BY fullName")
         .all(),
       pettyCashBalance(db),
       accountBalances(db),
@@ -381,7 +384,7 @@ async function api(request, env, user, path, method, url) {
       settings,
       tags: tags.results.map((t) => t.name),
       documents: docs.results,
-      directory: directory.results.map((u) => ({ ...u, active: !!u.active, financialLimit: Number(u.financialLimit) })),
+      directory: directory.results.map(({ tier, ...u }) => ({ ...u, role: effectiveRole({ ...u, tier }), active: !!u.active, financialLimit: Number(u.financialLimit) })),
       pettyCash,
       balances,
       documentsEnabled: !!env.BUCKET,
@@ -440,11 +443,23 @@ async function api(request, env, user, path, method, url) {
     return json({ ok: true, settings: await getSettings(db) });
   }
 
+  if (path === '/api/categories' && method === 'POST') {
+    if (!canManageLists(user)) fail(403, 'Only Mid Users and Super Users can add categories.');
+    const name = cleanText((await readJson(request)).name, 80);
+    if (!name) fail(400, 'Category name is required.');
+    if (name === 'Transfer') fail(400, '“Transfer” is reserved for transfers between accounts.');
+    const settings = await getSettings(db);
+    if (settings.categories.some((c) => c.toLowerCase() === name.toLowerCase())) fail(409, 'That category already exists.');
+    await db.batch([putSettingStmt(db, 'categories', [...settings.categories, name]), auditStmt(db, user, 'category.added', name)]);
+    return json({ ok: true, settings: await getSettings(db) });
+  }
+
   if (seg[0] === 'tags') {
     if (seg.length === 1 && method === 'POST') {
+      if (!canManageLists(user)) fail(403, 'Only Mid Users and Super Users can create tags.');
       const name = cleanText((await readJson(request)).name, 40);
       if (!name) fail(400, 'Tag name is required.');
-      await db.prepare('INSERT OR IGNORE INTO tags (name, createdAt) VALUES (?, ?)').bind(name, nowISO()).run();
+      await db.batch([db.prepare('INSERT OR IGNORE INTO tags (name, createdAt) VALUES (?, ?)').bind(name, nowISO()), auditStmt(db, user, 'tag.added', name)]);
       return json({ ok: true });
     }
     if (seg.length === 2 && method === 'DELETE') {

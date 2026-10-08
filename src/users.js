@@ -1,9 +1,10 @@
 // User administration (Admin) and financial-limit delegation (Super User).
 import { hashPassword, randomSalt, validatePassword } from './auth.js';
-import { auditStmt, notifyStmt, publicUser, getSettings } from './db.js';
+import { auditStmt, notifyStmt, publicUser, getSettings, effectiveRole, storedRole } from './db.js';
 import { fail, uuid, nowISO, cleanText, cents, parseAmount, formatMoney, normalizeMobile } from './util.js';
 
-const ROLE_LABEL = { admin: 'Admin', superuser: 'Super User', user: 'User' };
+const ROLE_LABEL = { admin: 'Admin', superuser: 'Super User', miduser: 'Mid User', user: 'User' };
+const ASSIGNABLE_ROLES = ['user', 'miduser', 'superuser'];
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/i;
 const MOBILE_HELP = 'Enter a valid mobile number, e.g. 01712345678 or +8801712345678.';
 
@@ -18,7 +19,7 @@ export async function createUser(db, admin, input) {
   const fullName = cleanText(input.fullName, 80);
   if (!fullName) fail(400, 'Full name is required.');
   const role = input.role;
-  if (!['user', 'superuser'].includes(role)) fail(400, 'Admin can create a User or a Super User only.');
+  if (!ASSIGNABLE_ROLES.includes(role)) fail(400, 'Admin can create a User, Mid User or Super User only.');
   const mobile = normalizeMobile(input.mobile);
   if (mobile === null) fail(400, 'Mobile number is required.');
   if (mobile === undefined) fail(400, MOBILE_HELP);
@@ -44,10 +45,10 @@ export async function createUser(db, admin, input) {
   await db.batch([
     db
       .prepare(
-        `INSERT INTO users (id, username, fullName, designation, mobile, role, passwordHash, passwordSalt, financialLimit, active, mustChangePassword, sessionVersion, createdBy, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, 0, ?, ?, ?)`,
+        `INSERT INTO users (id, username, fullName, designation, mobile, role, tier, passwordHash, passwordSalt, financialLimit, active, mustChangePassword, sessionVersion, createdBy, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1, 0, ?, ?, ?)`,
       )
-      .bind(user.id, user.username, user.fullName, user.designation, user.mobile, user.role, user.passwordHash, user.passwordSalt, user.createdBy, now, now),
+      .bind(user.id, user.username, user.fullName, user.designation, user.mobile, storedRole(role).role, storedRole(role).tier, user.passwordHash, user.passwordSalt, user.createdBy, now, now),
     notifyStmt(db, {
       userId: user.id,
       kind: 'info',
@@ -88,11 +89,11 @@ export async function updateUser(db, admin, id, input) {
     sets.push('designation = ?');
     binds.push(cleanText(input.designation, 80) || null);
   }
-  if (input.role !== undefined && input.role !== target.role) {
-    if (!['user', 'superuser'].includes(input.role)) fail(400, 'Role must be User or Super User.');
-    sets.push('role = ?');
-    binds.push(input.role);
-    notes.push(`role ${ROLE_LABEL[target.role]} → ${ROLE_LABEL[input.role]}`);
+  if (input.role !== undefined && input.role !== effectiveRole(target)) {
+    if (!ASSIGNABLE_ROLES.includes(input.role)) fail(400, 'Role must be User, Mid User or Super User.');
+    sets.push('role = ?', 'tier = ?');
+    binds.push(storedRole(input.role).role, storedRole(input.role).tier);
+    notes.push(`role ${ROLE_LABEL[effectiveRole(target)]} → ${ROLE_LABEL[input.role]}`);
     bumpSessions = true;
   }
   if (input.active !== undefined && !!input.active !== !!target.active) {

@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   designation        TEXT,
   mobile             TEXT,                         -- E.164, e.g. +8801712345678
   role               TEXT NOT NULL CHECK (role IN ('admin', 'superuser', 'user')),
+  tier               TEXT,                         -- 'mid' = Mid User (stored with role 'user')
   passwordHash       TEXT NOT NULL,
   passwordSalt       TEXT NOT NULL,
   financialLimit     REAL NOT NULL DEFAULT 0,      -- 0 = no financial authority
