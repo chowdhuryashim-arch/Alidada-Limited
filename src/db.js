@@ -57,6 +57,8 @@ export async function ensureSchema(db) {
   }
   // Indexes on added columns (they cannot live in schema.sql, which runs first).
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_tx_loan ON transactions (loanId, status)').run();
+  // Dates are shown as DD/MM/YYYY; entries made before that were stored as DD-MM-YYYY.
+  await db.prepare("UPDATE transactions SET date = replace(date, '-', '/') WHERE date LIKE '__-__-____'").run();
   schemaReady = true;
 }
 

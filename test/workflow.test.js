@@ -314,6 +314,8 @@ test('ALIDADA ledger: roles, limits, maker-checker workflow', async () => {
   assert.equal(r.data.transaction.kind, 'loan_given');
   assert.equal(r.data.transaction.type, 'transfer', 'stored as a movement, not an expense');
   assert.equal(r.data.transaction.description, 'Loan to Rahim Uddin — Medical advance');
+  assert.equal(r.data.transaction.date, today, 'dates are DD/MM/YYYY');
+  assert.match(r.data.transaction.date, /^\d{2}\/\d{2}\/\d{4}$/);
   const loanPay = r.data.transaction;
   st = (await U1.get('/api/state')).data;
   let loan = st.loans.find((l) => l.borrower === 'Rahim Uddin');

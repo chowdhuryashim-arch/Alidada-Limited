@@ -65,13 +65,38 @@
     if (!iso) return '';
     const d = new Date(iso);
     const p = (x) => String(x).padStart(2, '0');
-    return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
   };
   const todayDMY = () => {
     const d = new Date();
     const p = (x) => String(x).padStart(2, '0');
     return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
   };
+  // Every date on screen and in print is DD/MM/YYYY; YYYY-MM-DD is used only internally.
+  const isoToDMY = (iso) => (iso ? iso.split('-').reverse().join('/') : '');
+  function dmyToISO(s) {
+    const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(s || '').trim());
+    if (!m) return null;
+    const [d, mo, y] = [+m[1], +m[2], +m[3]];
+    const dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  // Types the slashes for you while entering DD/MM/YYYY.
+  function maskDate(input, onInput) {
+    input.addEventListener('input', (e) => {
+      const digits = e.target.value.replace(/\D/g, '').slice(0, 8);
+      let out = digits.slice(0, 2);
+      if (digits.length > 2) out += '/' + digits.slice(2, 4);
+      if (digits.length > 4) out += '/' + digits.slice(4);
+      e.target.value = out;
+      onInput && onInput();
+    });
+  }
+  // A DD/MM/YYYY box: '' when empty, the ISO date when valid, undefined when invalid.
+  const readDMY = (input) => (input.value.trim() ? dmyToISO(input.value) ?? undefined : '');
+  const dateBox = (id, iso, label) =>
+    `<input class="input num" id="${id}" value="${esc(isoToDMY(iso))}" placeholder="DD/MM/YYYY" inputmode="numeric" maxlength="10" autocomplete="off" aria-label="${esc(label)}" style="width:8.5em">`;
   const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
   class ApiError extends Error {
@@ -231,9 +256,9 @@
   const periodSelect = (id) =>
     `<select class="input" id="${id}" style="width:auto">${PERIODS.map(([v, l]) => `<option value="${v}"${S.period === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
      <span class="row${S.period === 'custom' ? '' : ' hidden'}" id="${id}-range" style="gap:6px;flex-wrap:nowrap">
-       <input class="input" type="date" id="${id}-from" value="${esc(S.customFrom || '')}" style="width:auto" aria-label="From date">
+       ${dateBox(`${id}-from`, S.customFrom, 'From date (DD/MM/YYYY)')}
        <span class="muted">to</span>
-       <input class="input" type="date" id="${id}-to" value="${esc(S.customTo || '')}" style="width:auto" aria-label="To date">
+       ${dateBox(`${id}-to`, S.customTo, 'To date (DD/MM/YYYY)')}
      </span>`;
   // Wire a period select (and its custom From/To pickers) to a redraw.
   function bindPeriod(el, id, onChange) {
@@ -244,11 +269,19 @@
       onChange();
     });
     for (const [part, key] of [['from', 'customFrom'], ['to', 'customTo']]) {
-      $(`#${id}-${part}`, el).addEventListener('change', (e) => {
-        S[key] = e.target.value || null;
+      const input = $(`#${id}-${part}`, el);
+      const apply = () => {
+        const v = readDMY(input);
+        input.classList.toggle('invalid', v === undefined);
+        if (v === undefined) return;
+        if ((v || null) === S[key]) return;
+        S[key] = v || null;
         store.set(key, S[key]);
         onChange();
-      });
+      };
+      // Apply as soon as a full date is typed, or when the box is cleared.
+      maskDate(input, () => (input.value.length === 10 || !input.value) && apply());
+      input.addEventListener('change', apply);
     }
   }
 
@@ -1074,14 +1107,7 @@
     if ($('#ae-borrower', el)) setTimeout(() => $('#ae-borrower', el).focus(), 40);
 
     // Masked DD/MM/YYYY date input
-    $('#ae-date', el).addEventListener('input', (e) => {
-      const digits = e.target.value.replace(/\D/g, '').slice(0, 8);
-      let out = digits.slice(0, 2);
-      if (digits.length > 2) out += '/' + digits.slice(2, 4);
-      if (digits.length > 4) out += '/' + digits.slice(4);
-      e.target.value = out;
-      resetForce();
-    });
+    maskDate($('#ae-date', el), resetForce);
 
     // Tags
     const drawTags = () => {
@@ -1221,7 +1247,7 @@
     void: ['Cancelled', 'cancelled'],
   };
   const loanChip = (l) => `<span class="chip ${LOAN_STATUS[l.status][1]}">${esc(LOAN_STATUS[l.status][0])}</span>`;
-  const dmyISO = (iso) => (iso ? iso.split('-').reverse().join('-') : '—');
+  const dmyISO = (iso) => isoToDMY(iso) || '—';
 
   function renderLoans(el, param) {
     const loans = S.data.loans;
@@ -2190,8 +2216,8 @@
         </div>
         <label class="field"><span>Date range</span><select class="input" id="st-preset">${PERIODS.map(([v, l]) => `<option value="${v}"${v === S.period ? ' selected' : ''}>${v === 'all' ? 'All dates' : l}</option>`).join('')}</select></label>
         <div class="grid-2">
-          <label class="field"><span>From</span><input class="input" type="date" id="st-from" value="${a || ''}"></label>
-          <label class="field"><span>To</span><input class="input" type="date" id="st-to" value="${b || ''}"></label>
+          <label class="field"><span>From (DD/MM/YYYY)</span>${dateBox('st-from', a, 'From date')}</label>
+          <label class="field"><span>To (DD/MM/YYYY)</span>${dateBox('st-to', b, 'To date')}</label>
         </div>
         <div class="small muted">Leave From empty to start at the first entry, or To empty to run up to today. Only posted transactions appear. The statement opens in a new tab ready to print or save as PDF.</div>`,
       footer: `<button class="btn" data-close>Cancel</button><button class="btn primary" id="st-ok">${icon('print')}Generate statement</button>`,
@@ -2200,13 +2226,14 @@
     $('#st-preset', m.el).addEventListener('change', (e) => {
       if (e.target.value === 'custom') return;
       const [pa, pb] = periodRange(e.target.value);
-      $('#st-from', m.el).value = pa || '';
-      $('#st-to', m.el).value = pb || '';
+      $('#st-from', m.el).value = isoToDMY(pa);
+      $('#st-to', m.el).value = isoToDMY(pb);
     });
-    ['#st-from', '#st-to'].forEach((sel) => $(sel, m.el).addEventListener('change', () => ($('#st-preset', m.el).value = 'custom')));
+    ['#st-from', '#st-to'].forEach((sel) => maskDate($(sel, m.el), () => ($('#st-preset', m.el).value = 'custom')));
     $('#st-ok', m.el).addEventListener('click', () => {
-      const from = $('#st-from', m.el).value || null;
-      const to = $('#st-to', m.el).value || null;
+      const from = readDMY($('#st-from', m.el));
+      const to = readDMY($('#st-to', m.el));
+      if (from === undefined || to === undefined) return toast('Enter dates as DD/MM/YYYY, for example 01/10/2026.', 'error');
       if (from && to && from > to) return toast('The From date is after the To date.', 'error');
       const win = window.open('', '_blank');
       if (!win) return toast('Please allow pop-ups for this site to print the statement.', 'error');
@@ -2217,7 +2244,7 @@
   }
 
   function statementHtml(account, from, to, tag = '') {
-    const dmy = (iso) => iso.split('-').reverse().join('-');
+    const dmy = isoToDMY;
     // Running/opening/closing balances only make sense for a whole account,
     // not for a tag's subset of it.
     const balances = !!account && !tag;

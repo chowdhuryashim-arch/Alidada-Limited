@@ -16,6 +16,8 @@ const TYPE_LABEL = { expense: 'Expense', receive: 'Receive Fund', transfer: 'Tra
 // protected LOAN_ACCOUNT (type 'transfer'), so they never count as expenses or
 // funds received. Their kind is derived from the direction.
 export const kindOf = (tx) => (tx.loanId ? (tx.account === LOAN_ACCOUNT ? 'loan_recovery' : 'loan_given') : tx.type);
+// Entries restored from an old backup may still carry DD-MM-YYYY.
+const displayDate = (d) => String(d || '').replace(/-/g, '/');
 const withArticle = (s) => `${/^[AEIOU]/i.test(s) ? 'an' : 'a'} ${s}`;
 const MAX_AMOUNT = 1e12;
 const TX_COLUMNS = [
@@ -78,7 +80,7 @@ export function rowToTx(r) {
     /* ignore */
   }
   const { fingerprint, ...rest } = r;
-  return { ...rest, kind: kindOf(r), amount: Number(r.amount), tags, autoPosted: !!r.autoPosted };
+  return { ...rest, date: displayDate(r.date), kind: kindOf(r), amount: Number(r.amount), tags, autoPosted: !!r.autoPosted };
 }
 
 async function loadTx(db, id) {
@@ -118,7 +120,7 @@ function eventStmt(db, transactionId, action, actorId, remark = null) {
 function describe(tx, symbol) {
   const what = TYPE_LABEL[kindOf(tx)];
   const where = tx.type === 'transfer' ? `${tx.account} → ${tx.toAccount}` : tx.account;
-  return `${what} of ${formatMoney(tx.amount, symbol)} — “${tx.description}” (${where}, dated ${tx.date})`;
+  return `${what} of ${formatMoney(tx.amount, symbol)} — “${tx.description}” (${where}, dated ${displayDate(tx.date)})`;
 }
 
 // ---- Validation -----------------------------------------------------------

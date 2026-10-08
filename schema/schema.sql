@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS counters (
 CREATE TABLE IF NOT EXISTS transactions (
   id             TEXT PRIMARY KEY,
   voucherNo      TEXT NOT NULL UNIQUE,
-  date           TEXT NOT NULL,                 -- DD-MM-YYYY, as displayed
+  date           TEXT NOT NULL,                 -- DD/MM/YYYY, as displayed
   dateISO        TEXT NOT NULL,                 -- YYYY-MM-DD, for sorting / periods
   description    TEXT NOT NULL,
   category       TEXT NOT NULL DEFAULT 'Needs review',

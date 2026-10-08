@@ -612,6 +612,8 @@ async function restore(env, user, body) {
       stmts.push(db.prepare(`INSERT OR REPLACE INTO ${t} (${use.join(', ')}) VALUES (${use.map(() => '?').join(', ')})`).bind(...use.map((c) => row[c])));
     }
   }
+  // Older backups hold DD-MM-YYYY dates; the ledger shows DD/MM/YYYY.
+  stmts.push(db.prepare("UPDATE transactions SET date = replace(date, '-', '/') WHERE date LIKE '__-__-____'"));
   stmts.push(auditStmt(db, user, 'backup.restored', `export of ${cleanText(b.exportedAt, 40)}`));
   await db.batch(stmts);
   return json({ ok: true, restored: Object.fromEntries(BACKUP_TABLES.map((t) => [t, (b.data[t] || []).length])) });

@@ -72,7 +72,7 @@ export function parseDate(value) {
   if (dt.getUTCFullYear() !== +y || dt.getUTCMonth() !== +m - 1 || dt.getUTCDate() !== +d) return null;
   const dd = String(d).padStart(2, '0');
   const mm = String(m).padStart(2, '0');
-  return { date: `${dd}-${mm}-${y}`, dateISO: `${y}-${mm}-${dd}` };
+  return { date: `${dd}/${mm}/${y}`, dateISO: `${y}-${mm}-${dd}` };
 }
 
 export function todayParts() {

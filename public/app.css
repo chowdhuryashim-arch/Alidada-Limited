@@ -176,6 +176,7 @@ svg.icon { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: no
 }
 textarea.input { height: auto; min-height: 70px; padding: 10px 12px; resize: vertical; }
 .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input.invalid { border-color: var(--danger); }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
